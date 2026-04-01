@@ -1,0 +1,5 @@
+smtp_config.json
+qualia_app.db
+__pycache__/
+uploads/
+

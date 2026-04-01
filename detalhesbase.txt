@@ -1,0 +1,29 @@
+Estrutura das classificações (escala 1-5):
+
+1 = Muito Ruim (abaixo do percentil 10)
+
+2 = Ruim (percentil 10-25)
+
+3 = Moderado (percentil 25-75)
+
+4 = Bom (percentil 75-90)
+
+5 = Excelente (acima do percentil 90)
+
+Critérios de classificação usados:
+
+Classificação IMC: Baseada em tabelas OMS
+
+Classificação Gordura: Baseada em Pollock & Wilmore (1993) por idade e gênero
+
+Classificação Flexibilidade: Baseada em Wells & Dillon (banco de Wells)
+
+Classificação Abdominal: Baseada em Pollock & Wilmore por idade e gênero
+
+Classificação Flexão Braço: Baseada em Pollock & Wilmore por idade e gênero
+
+Classificação FC Recuperação: Quanto mais rápida a recuperação, melhor
+
+Classificação Cooper: Baseada em tabelas por idade e gênero
+
+Score Qualidade Vida: Média ponderada de todas as classificações

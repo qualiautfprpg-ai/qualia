@@ -1,0 +1,4 @@
+model,mae_test,r2_test,cv_mae_best,best_params_json
+RandomForest,1.5884848484848482,0.48488056345658925,1.1181960784313723,"{""model__n_estimators"": 300, ""model__min_samples_split"": 2, ""model__min_samples_leaf"": 1, ""model__max_features"": ""sqrt"", ""model__max_depth"": null, ""model__bootstrap"": false}"
+GradientBoosting,1.809289261046561,0.4340423789171882,1.0976739126654784,"{""model__subsample"": 0.7, ""model__n_estimators"": 500, ""model__min_samples_split"": 2, ""model__min_samples_leaf"": 2, ""model__max_depth"": 4, ""model__loss"": ""squared_error"", ""model__learning_rate"": 0.2}"
+HistGradientBoosting,2.055381400208985,-0.12831246853745748,1.579289570900826,"{""model__min_samples_leaf"": 50, ""model__max_leaf_nodes"": 63, ""model__max_depth"": 5, ""model__learning_rate"": 0.1, ""model__l2_regularization"": 0.1}"
