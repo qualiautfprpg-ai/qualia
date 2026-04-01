@@ -340,6 +340,18 @@ class RowAdapter:
     def get(self, key: str, default: Any = None) -> Any:
         return self._mapping.get(key, default)
 
+    def keys(self) -> List[str]:
+        return list(self._columns)
+
+    def items(self):
+        return self._mapping.items()
+
+    def values(self):
+        return self._mapping.values()
+
+    def __contains__(self, key: Any) -> bool:
+        return key in self._mapping
+
 
 class CursorAdapter:
     def __init__(self, cursor: Any, rows: Optional[List[RowAdapter]] = None, lastrowid: Optional[int] = None):
