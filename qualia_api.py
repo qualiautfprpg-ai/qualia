@@ -25,6 +25,10 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 import fitz
+try:
+    import psycopg
+except Exception:  # pragma: no cover - optional local dependency
+    psycopg = None
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -42,6 +46,8 @@ TEACHERS = ("Adriana Guimarães", "José Alves Faria")
 MQTT_SHARED_KEY = os.getenv("QUALIA_MQTT_KEY", "qualia-local-key")
 GOOGLE_CLIENT_ID = os.getenv("QUALIA_GOOGLE_CLIENT_ID", "")
 CORS_ORIGINS = [origin.strip() for origin in os.getenv("QUALIA_CORS_ORIGINS", "*").split(",") if origin.strip()]
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+USING_POSTGRES = DATABASE_URL.startswith("postgres")
 if not MODEL_PATH.exists():
     raise FileNotFoundError(
         f"Arquivo de modelo não encontrado em {MODEL_PATH}. "
@@ -320,7 +326,112 @@ def default_password_from_cpf(cpf: str) -> str:
     return (digits[-4:] if len(digits) >= 4 else "1234") or "1234"
 
 
-def get_conn() -> sqlite3.Connection:
+class RowAdapter:
+    def __init__(self, columns: List[str], values: Tuple[Any, ...]):
+        self._columns = list(columns)
+        self._values = tuple(values)
+        self._mapping = {column: values[index] for index, column in enumerate(columns)}
+
+    def __getitem__(self, key: Any) -> Any:
+        if isinstance(key, int):
+            return self._values[key]
+        return self._mapping[key]
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self._mapping.get(key, default)
+
+
+class CursorAdapter:
+    def __init__(self, cursor: Any, rows: Optional[List[RowAdapter]] = None, lastrowid: Optional[int] = None):
+        self._cursor = cursor
+        self._rows = rows
+        self._index = 0
+        self.lastrowid = lastrowid
+
+    def fetchone(self) -> Optional[RowAdapter]:
+        if self._rows is None:
+            return self._cursor.fetchone()
+        if self._index >= len(self._rows):
+            return None
+        row = self._rows[self._index]
+        self._index += 1
+        return row
+
+    def fetchall(self) -> List[RowAdapter]:
+        if self._rows is None:
+            return self._cursor.fetchall()
+        if self._index >= len(self._rows):
+            return []
+        rows = self._rows[self._index :]
+        self._index = len(self._rows)
+        return rows
+
+
+class ConnectionAdapter:
+    def __init__(self, raw: Any, use_postgres: bool):
+        self.raw = raw
+        self.use_postgres = use_postgres
+
+    def _adapt_sql(self, sql: str) -> str:
+        adapted = sql
+        if not self.use_postgres:
+            return adapted
+        adapted = adapted.replace("?", "%s")
+        adapted = adapted.replace("pendente_configuração", "pendente_configuracao")
+        adapted = adapted.replace(
+            "json_extract(e.result_json, '$.score_ia')",
+            "CAST(e.result_json::json ->> 'score_ia' AS DOUBLE PRECISION)",
+        )
+        adapted = adapted.replace(
+            "json_extract(e.result_json, '$.score_ia') AS score_ia",
+            "CAST(e.result_json::json ->> 'score_ia' AS DOUBLE PRECISION) AS score_ia",
+        )
+        return adapted
+
+    def execute(self, sql: str, params: Tuple[Any, ...] = ()) -> CursorAdapter:
+        if not self.use_postgres:
+            return self.raw.execute(sql, params)
+
+        adapted = self._adapt_sql(sql)
+        if "INSERT OR IGNORE INTO users" in adapted:
+            adapted = adapted.replace("INSERT OR IGNORE INTO users", "INSERT INTO users", 1)
+            adapted += " ON CONFLICT (email) DO NOTHING"
+
+        needs_returning = False
+        if adapted.lstrip().upper().startswith("INSERT INTO ") and " RETURNING " not in adapted.upper():
+            for table in ("evaluations", "appointments", "disciplines"):
+                if f"INSERT INTO {table}" in adapted:
+                    adapted += " RETURNING id"
+                    needs_returning = True
+                    break
+
+        cursor = self.raw.execute(adapted, params)
+        if needs_returning:
+            returned = cursor.fetchone()
+            lastrowid = returned[0] if returned else None
+            rows: List[RowAdapter] = []
+            return CursorAdapter(cursor, rows=rows, lastrowid=lastrowid)
+
+        if cursor.description is None:
+            return CursorAdapter(cursor)
+
+        columns = [desc.name for desc in cursor.description]
+        rows = [RowAdapter(columns, row) for row in cursor.fetchall()]
+        return CursorAdapter(cursor, rows=rows)
+
+    def commit(self) -> None:
+        self.raw.commit()
+
+    def close(self) -> None:
+        self.raw.close()
+
+
+def get_conn() -> Any:
+    if USING_POSTGRES:
+        if psycopg is None:
+            raise RuntimeError("psycopg não está instalado para uso com PostgreSQL.")
+        raw = psycopg.connect(DATABASE_URL)
+        return ConnectionAdapter(raw, use_postgres=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
@@ -329,79 +440,157 @@ def get_conn() -> sqlite3.Connection:
 def init_db() -> None:
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
     conn = get_conn()
-    conn.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nome TEXT NOT NULL,
-            email TEXT NOT NULL UNIQUE,
-            password_hash TEXT NOT NULL,
-            role TEXT NOT NULL DEFAULT 'user',
-            idade INTEGER,
-            sexo TEXT,
-            altura_cm REAL,
-            cpf TEXT,
-            observacoes TEXT,
-            created_at TEXT NOT NULL
-        );
+    if USING_POSTGRES:
+        statements = [
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id BIGSERIAL PRIMARY KEY,
+                nome TEXT NOT NULL,
+                email TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'user',
+                idade INTEGER,
+                sexo TEXT,
+                altura_cm DOUBLE PRECISION,
+                cpf TEXT,
+                observacoes TEXT,
+                created_at TEXT NOT NULL
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS evaluations (
+                id BIGSERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                tipo_avaliacao TEXT NOT NULL,
+                fonte TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                result_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS sessions (
+                token TEXT PRIMARY KEY,
+                user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS appointments (
+                id BIGSERIAL PRIMARY KEY,
+                nome TEXT NOT NULL,
+                email TEXT NOT NULL,
+                telefone TEXT NOT NULL,
+                data_agendada TEXT NOT NULL,
+                horario_agendado TEXT NOT NULL,
+                local TEXT NOT NULL,
+                observacoes TEXT,
+                status TEXT NOT NULL,
+                email_status TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS disciplines (
+                id BIGSERIAL PRIMARY KEY,
+                professor_nome TEXT NOT NULL,
+                ano INTEGER NOT NULL,
+                nome TEXT NOT NULL,
+                codigo TEXT NOT NULL,
+                horario TEXT NOT NULL,
+                turma_nome TEXT NOT NULL,
+                arquivo_referencia TEXT,
+                created_at TEXT NOT NULL
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS roster_students (
+                id BIGSERIAL PRIMARY KEY,
+                disciplina_id BIGINT NOT NULL REFERENCES disciplines(id) ON DELETE CASCADE,
+                nome TEXT NOT NULL,
+                matricula TEXT,
+                linked_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+                created_at TEXT NOT NULL
+            )
+            """,
+        ]
+        for statement in statements:
+            conn.execute(statement)
+    else:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nome TEXT NOT NULL,
+                email TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'user',
+                idade INTEGER,
+                sexo TEXT,
+                altura_cm REAL,
+                cpf TEXT,
+                observacoes TEXT,
+                created_at TEXT NOT NULL
+            );
 
-        CREATE TABLE IF NOT EXISTS evaluations (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            tipo_avaliacao TEXT NOT NULL,
-            fonte TEXT NOT NULL,
-            payload_json TEXT NOT NULL,
-            result_json TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-        );
+            CREATE TABLE IF NOT EXISTS evaluations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                tipo_avaliacao TEXT NOT NULL,
+                fonte TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                result_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
 
-        CREATE TABLE IF NOT EXISTS sessions (
-            token TEXT PRIMARY KEY,
-            user_id INTEGER NOT NULL,
-            created_at TEXT NOT NULL,
-            expires_at TEXT NOT NULL,
-            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-        );
+            CREATE TABLE IF NOT EXISTS sessions (
+                token TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
 
-        CREATE TABLE IF NOT EXISTS appointments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nome TEXT NOT NULL,
-            email TEXT NOT NULL,
-            telefone TEXT NOT NULL,
-            data_agendada TEXT NOT NULL,
-            horario_agendado TEXT NOT NULL,
-            local TEXT NOT NULL,
-            observacoes TEXT,
-            status TEXT NOT NULL,
-            email_status TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        );
+            CREATE TABLE IF NOT EXISTS appointments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nome TEXT NOT NULL,
+                email TEXT NOT NULL,
+                telefone TEXT NOT NULL,
+                data_agendada TEXT NOT NULL,
+                horario_agendado TEXT NOT NULL,
+                local TEXT NOT NULL,
+                observacoes TEXT,
+                status TEXT NOT NULL,
+                email_status TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
 
-        CREATE TABLE IF NOT EXISTS disciplines (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            professor_nome TEXT NOT NULL,
-            ano INTEGER NOT NULL,
-            nome TEXT NOT NULL,
-            codigo TEXT NOT NULL,
-            horario TEXT NOT NULL,
-            turma_nome TEXT NOT NULL,
-            arquivo_referencia TEXT,
-            created_at TEXT NOT NULL
-        );
+            CREATE TABLE IF NOT EXISTS disciplines (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                professor_nome TEXT NOT NULL,
+                ano INTEGER NOT NULL,
+                nome TEXT NOT NULL,
+                codigo TEXT NOT NULL,
+                horario TEXT NOT NULL,
+                turma_nome TEXT NOT NULL,
+                arquivo_referencia TEXT,
+                created_at TEXT NOT NULL
+            );
 
-        CREATE TABLE IF NOT EXISTS roster_students (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            disciplina_id INTEGER NOT NULL,
-            nome TEXT NOT NULL,
-            matricula TEXT,
-            linked_user_id INTEGER,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY(disciplina_id) REFERENCES disciplines(id) ON DELETE CASCADE,
-            FOREIGN KEY(linked_user_id) REFERENCES users(id) ON DELETE SET NULL
-        );
-        """
-    )
+            CREATE TABLE IF NOT EXISTS roster_students (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                disciplina_id INTEGER NOT NULL,
+                nome TEXT NOT NULL,
+                matricula TEXT,
+                linked_user_id INTEGER,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(disciplina_id) REFERENCES disciplines(id) ON DELETE CASCADE,
+                FOREIGN KEY(linked_user_id) REFERENCES users(id) ON DELETE SET NULL
+            );
+            """
+        )
 
     admin = conn.execute("SELECT id FROM users WHERE email = ?", (DEFAULT_ADMIN_EMAIL,)).fetchone()
     if not admin:
@@ -1456,7 +1645,7 @@ def create_appointment(payload: AppointmentCreate, background_tasks: BackgroundT
             """,
             (payload.data_agendada, payload.horario_agendado),
         ).fetchone()
-    except sqlite3.Error as exc:
+    except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Erro ao preparar o agendamento: {exc}") from exc
 
     if existing:
@@ -1488,7 +1677,7 @@ def create_appointment(payload: AppointmentCreate, background_tasks: BackgroundT
         )
         conn.commit()
         appointment_id = int(cur.lastrowid)
-    except sqlite3.Error as exc:
+    except Exception as exc:
         conn.close()
         raise HTTPException(status_code=500, detail=f"Erro ao salvar o agendamento: {exc}") from exc
     conn.close()
