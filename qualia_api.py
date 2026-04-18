@@ -797,6 +797,70 @@ def load_smtp_settings() -> Dict[str, Any]:
     }
 
 
+def load_resend_settings() -> Dict[str, str]:
+    return {
+        "api_key": os.getenv("RESEND_API_KEY", "").strip(),
+        "from": os.getenv("RESEND_FROM", "").strip() or os.getenv("QUALIA_EMAIL_FROM", "").strip(),
+    }
+
+
+def send_email_message(subject: str, recipients: List[str], body: str, timeout: int = 20) -> str:
+    clean_recipients = [recipient.strip() for recipient in recipients if recipient and recipient.strip()]
+    if not clean_recipients:
+        return "pendente_configuracao"
+
+    resend_settings = load_resend_settings()
+    if resend_settings["api_key"]:
+        sender = resend_settings["from"] or "QualIA <onboarding@resend.dev>"
+        payload = json.dumps(
+            {
+                "from": sender,
+                "to": clean_recipients,
+                "subject": subject,
+                "text": body,
+            }
+        ).encode("utf-8")
+        request = urllib.request.Request(
+            "https://api.resend.com/emails",
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {resend_settings['api_key']}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            if response.status >= 400:
+                raise RuntimeError(f"Erro no Resend: HTTP {response.status}")
+        return "enviado"
+
+    smtp_settings = load_smtp_settings()
+    smtp_host = smtp_settings["host"]
+    smtp_port = smtp_settings["port"]
+    smtp_user = smtp_settings["user"]
+    smtp_pass = smtp_settings["pass"]
+    smtp_from = smtp_settings["from"] or smtp_user or "qualia@localhost"
+    if not all([smtp_host, smtp_user, smtp_pass, smtp_from]):
+        return "pendente_configuracao"
+
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = smtp_from
+    message["To"] = ", ".join(clean_recipients)
+    message.set_content(body)
+
+    if int(smtp_port) == 465:
+        with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=timeout) as smtp:
+            smtp.login(smtp_user, smtp_pass)
+            smtp.send_message(message)
+    else:
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=timeout) as smtp:
+            smtp.starttls()
+            smtp.login(smtp_user, smtp_pass)
+            smtp.send_message(message)
+    return "enviado"
+
+
 def get_schedule_slots() -> Dict[int, List[str]]:
     return {
         0: ["13:50", "14:20", "14:50", "15:20", "15:50", "16:20", "16:50", "17:20"],
@@ -820,53 +884,25 @@ def validate_appointment_slot(date_str: str, time_str: str) -> None:
 
 
 def send_appointment_email(payload: AppointmentCreate) -> str:
-    smtp_settings = load_smtp_settings()
-    smtp_host = smtp_settings["host"]
-    smtp_port = smtp_settings["port"]
-    smtp_user = smtp_settings["user"]
-    smtp_pass = smtp_settings["pass"]
-    smtp_from = smtp_settings["from"] or smtp_user or "qualia@localhost"
-
     recipients = [
         "adriana@utfpr.edu.br",
         "gabriellyp@alunos.utfpr.edu.br",
         payload.email,
     ]
-
-    if not all([smtp_host, smtp_user, smtp_pass, smtp_from]):
-        return "pendente_configuração"
-
-    message = EmailMessage()
-    message["Subject"] = f"Agendamento de teste físico - {payload.nome}"
-    message["From"] = smtp_from
-    message["To"] = ", ".join(recipients)
-    message.set_content(
-        "\n".join(
-            [
-                "Novo agendamento de teste físico no QualIA.",
-                "",
-                f"Nome: {payload.nome}",
-                f"E-mail: {payload.email}",
-                f"Telefone: {payload.telefone}",
-                f"Data: {payload.data_agendada}",
-                f"Horário: {payload.horario_agendado}",
-                "Local: CAFIS - UTFPR Campus Ponta Grossa",
-                f"Observações: {payload.observacoes or 'Nenhuma'}",
-            ]
-        )
+    body = "\n".join(
+        [
+            "Novo agendamento de teste físico no QualIA.",
+            "",
+            f"Nome: {payload.nome}",
+            f"E-mail: {payload.email}",
+            f"Telefone: {payload.telefone}",
+            f"Data: {payload.data_agendada}",
+            f"Horário: {payload.horario_agendado}",
+            "Local: CAFIS - UTFPR Campus Ponta Grossa",
+            f"Observações: {payload.observacoes or 'Nenhuma'}",
+        ]
     )
-
-    if int(smtp_port) == 465:
-        with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=15) as smtp:
-            smtp.login(smtp_user, smtp_pass)
-            smtp.send_message(message)
-    else:
-        with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as smtp:
-            smtp.starttls()
-            smtp.login(smtp_user, smtp_pass)
-            smtp.send_message(message)
-
-    return "enviado"
+    return send_email_message(f"Agendamento de teste físico - {payload.nome}", recipients, body, timeout=15)
 
 
 def update_appointment_email_status(appointment_id: int, status: str) -> None:
@@ -885,45 +921,25 @@ def process_appointment_email(appointment_id: int, payload_data: Dict[str, Any])
 
 
 def send_appointment_cancellation_email(appointment_row: sqlite3.Row) -> str:
-    smtp_settings = load_smtp_settings()
-    smtp_host = smtp_settings["host"]
-    smtp_port = smtp_settings["port"]
-    smtp_user = smtp_settings["user"]
-    smtp_pass = smtp_settings["pass"]
-    smtp_from = smtp_settings["from"] or smtp_user or "qualia@localhost"
-    if not all([smtp_host, smtp_user, smtp_pass, smtp_from]):
-        return "pendente_configuracao"
-
-    message = EmailMessage()
-    message["Subject"] = f"Cancelamento de agendamento - {appointment_row['nome']}"
-    message["From"] = smtp_from
-    message["To"] = appointment_row["email"]
-    message.set_content(
-        "\n".join(
-            [
-                f"Olá, {appointment_row['nome']}.",
-                "",
-                "Seu agendamento de teste físico no QualIA foi cancelado.",
-                "",
-                f"Data: {appointment_row['data_agendada']}",
-                f"Horário: {appointment_row['horario_agendado']}",
-                f"Local: {appointment_row['local']}",
-                "",
-                "Se precisar, faça um novo agendamento pela plataforma.",
-            ]
-        )
+    body = "\n".join(
+        [
+            f"Olá, {appointment_row['nome']}.",
+            "",
+            "Seu agendamento de teste físico no QualIA foi cancelado.",
+            "",
+            f"Data: {appointment_row['data_agendada']}",
+            f"Horário: {appointment_row['horario_agendado']}",
+            f"Local: {appointment_row['local']}",
+            "",
+            "Se precisar, faça um novo agendamento pela plataforma.",
+        ]
     )
-
-    if int(smtp_port) == 465:
-        with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=15) as smtp:
-            smtp.login(smtp_user, smtp_pass)
-            smtp.send_message(message)
-    else:
-        with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as smtp:
-            smtp.starttls()
-            smtp.login(smtp_user, smtp_pass)
-            smtp.send_message(message)
-    return "enviado"
+    return send_email_message(
+        f"Cancelamento de agendamento - {appointment_row['nome']}",
+        [appointment_row["email"]],
+        body,
+        timeout=15,
+    )
 
 
 def build_dashboard_response_for_user(conn: sqlite3.Connection, user_id: int) -> DashboardResponse:
@@ -994,28 +1010,15 @@ def build_result_email_lines(record: EvaluationRecord) -> List[str]:
 
 
 def send_results_email(dashboard: DashboardResponse, recipient_email: str, scope: str) -> str:
-    smtp_settings = load_smtp_settings()
-    smtp_host = smtp_settings["host"]
-    smtp_port = smtp_settings["port"]
-    smtp_user = smtp_settings["user"]
-    smtp_pass = smtp_settings["pass"]
-    smtp_from = smtp_settings["from"] or smtp_user or "qualia@localhost"
-    if not all([smtp_host, smtp_user, smtp_pass, smtp_from]):
-        return "pendente_configuracao"
-
     records = dashboard.historico if scope == "all" else ([dashboard.ultima_avaliacao] if dashboard.ultima_avaliacao else [])
     if not records:
         raise HTTPException(status_code=400, detail="Este usuário ainda não possui avaliações para enviar.")
 
-    message = EmailMessage()
-    message["Subject"] = (
+    subject = (
         f"QualIA - Histórico de resultados de {dashboard.usuario.nome}"
         if scope == "all"
         else f"QualIA - Resultado mais recente de {dashboard.usuario.nome}"
     )
-    message["From"] = smtp_from
-    message["To"] = recipient_email
-
     body_lines = [
         f"Olá, {dashboard.usuario.nome}.",
         "",
@@ -1029,18 +1032,7 @@ def send_results_email(dashboard: DashboardResponse, recipient_email: str, scope
         body_lines.append(f"Resultado {index}")
         body_lines.append("-" * 24)
         body_lines.extend(build_result_email_lines(record))
-    message.set_content("\n".join(body_lines))
-
-    if int(smtp_port) == 465:
-        with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=20) as smtp:
-            smtp.login(smtp_user, smtp_pass)
-            smtp.send_message(message)
-    else:
-        with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as smtp:
-            smtp.starttls()
-            smtp.login(smtp_user, smtp_pass)
-            smtp.send_message(message)
-    return "enviado"
+    return send_email_message(subject, [recipient_email], "\n".join(body_lines), timeout=20)
 
 
 def classificar_pressao(sist: Optional[float], diast: Optional[float]) -> str:
@@ -1849,7 +1841,7 @@ def admin_cancel_appointment(
     if email_status == "enviado":
         message = "Agendamento desmarcado, removido da agenda e e-mail enviado."
     elif email_status == "pendente_configuracao":
-        message = "Agendamento removido da agenda. O aviso por e-mail depende do SMTP."
+        message = "Agendamento removido da agenda. O aviso por e-mail depende da configuração de envio."
     elif email_status == "falha_no_envio":
         message = "Agendamento removido da agenda, mas houve falha ao enviar o e-mail."
     return AppointmentCancelResponse(status="cancelado", email_status=email_status, message=message)
@@ -2198,7 +2190,7 @@ def email_my_results(
         else "Histórico completo enviado por e-mail."
     )
     if status == "pendente_configuracao":
-        message = "O SMTP ainda precisa estar configurado para enviar os resultados."
+        message = "O serviço de e-mail ainda precisa estar configurado para enviar os resultados."
     elif status == "falha_no_envio":
         message = "Houve falha no envio do e-mail com os resultados."
     return ResultsEmailResponse(
@@ -2232,7 +2224,7 @@ def email_user_results_as_admin(
         else "Histórico completo enviado por e-mail."
     )
     if status == "pendente_configuracao":
-        message = "O SMTP ainda precisa estar configurado para enviar os resultados."
+        message = "O serviço de e-mail ainda precisa estar configurado para enviar os resultados."
     elif status == "falha_no_envio":
         message = "Houve falha no envio do e-mail com os resultados."
     return ResultsEmailResponse(
