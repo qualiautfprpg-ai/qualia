@@ -177,6 +177,16 @@ class ResultsEmailResponse(BaseModel):
     error_detail: Optional[str] = None
 
 
+class EmailTestInput(BaseModel):
+    recipient_email: str
+
+
+class EmailTestResponse(BaseModel):
+    status: str
+    message: str
+    error_detail: Optional[str] = None
+
+
 class ConfigResponse(BaseModel):
     google_login_enabled: bool
     google_client_id: str
@@ -920,7 +930,8 @@ def update_appointment_email_status(appointment_id: int, status: str) -> None:
 def process_appointment_email(appointment_id: int, payload_data: Dict[str, Any]) -> None:
     try:
         status = send_appointment_email(AppointmentCreate(**payload_data))
-    except Exception:
+    except Exception as exc:
+        print(f"Falha ao enviar e-mail do agendamento {appointment_id}: {exc}", flush=True)
         status = "falha_no_envio"
     update_appointment_email_status(appointment_id, status)
 
@@ -1795,6 +1806,35 @@ def admin_overview(_: SessionUser = Depends(require_admin)) -> AdminOverview:
     total_evaluations = conn.execute("SELECT COUNT(*) FROM evaluations").fetchone()[0]
     conn.close()
     return AdminOverview(total_users=total_users, total_evaluations=total_evaluations)
+
+
+@app.post("/admin/email/test", response_model=EmailTestResponse)
+def admin_test_email(payload: EmailTestInput, _: SessionUser = Depends(require_admin)) -> EmailTestResponse:
+    try:
+        status = send_email_message(
+            "QualIA - teste de envio",
+            [payload.recipient_email],
+            "\n".join(
+                [
+                    "Este é um teste de envio do QualIA.",
+                    "",
+                    "Se você recebeu esta mensagem, a integração com o serviço de e-mail está funcionando.",
+                ]
+            ),
+            timeout=20,
+        )
+    except Exception as exc:
+        return EmailTestResponse(
+            status="falha_no_envio",
+            message=f"Houve falha no envio do teste. Detalhe: {exc}",
+            error_detail=str(exc),
+        )
+    if status == "enviado":
+        return EmailTestResponse(status=status, message="E-mail de teste enviado com sucesso.")
+    return EmailTestResponse(
+        status=status,
+        message="O serviço de e-mail ainda precisa estar configurado para enviar mensagens.",
+    )
 
 
 @app.get("/admin/appointments", response_model=List[AdminAppointmentItem])
