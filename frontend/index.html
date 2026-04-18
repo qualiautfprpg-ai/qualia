@@ -4,10 +4,12 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>QualIA</title>
+  <link rel="icon" type="image/png" href="./logo.png?v=20260418a" />
+  <link rel="apple-touch-icon" href="./logo.png?v=20260418a" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="./styles.css?v=20260331c" />
+  <link rel="stylesheet" href="./styles.css?v=20260418a" />
 </head>
 <body>
   <div class="page-shell">
@@ -15,7 +17,7 @@
       <header class="site-header">
         <div class="brand-block">
           <span class="brand-mark">
-            <span class="brand-mark-core"></span>
+            <img src="./logo.png?v=20260418a" alt="Logo QualIA" />
           </span>
           <div>
             <strong>QualIA</strong>
@@ -241,6 +243,26 @@
                 </label>
                 <button class="btn primary" type="submit">Entrar</button>
             </form>
+              <button id="forgot-password-btn" class="link-button" type="button">Esqueci minha senha</button>
+              <form id="forgot-password-form" class="login-form-grid hidden">
+                <label class="full">
+                  <span>E-mail cadastrado</span>
+                  <input id="forgot-email" type="email" placeholder="seuemail@exemplo.com" />
+                </label>
+                <button class="btn primary" type="submit">Enviar link de recuperação</button>
+              </form>
+              <form id="reset-password-form" class="login-form-grid hidden">
+                <label class="full">
+                  <span>Nova senha</span>
+                  <input id="reset-password" type="password" minlength="6" placeholder="Digite uma nova senha" />
+                </label>
+                <label class="full">
+                  <span>Confirmar nova senha</span>
+                  <input id="reset-password-confirm" type="password" minlength="6" placeholder="Repita a nova senha" />
+                </label>
+                <button class="btn primary" type="submit">Alterar senha</button>
+              </form>
+              <p id="password-recovery-feedback" class="form-feedback hidden"></p>
               <p id="google-hint" class="login-note">Use o e-mail e a senha cadastrados na plataforma.</p>
             </div>
           </div>
@@ -707,6 +729,6 @@
 
   <div id="toast" class="toast hidden"></div>
   <script src="./config.js"></script>
-  <script src="./script.js?v=20260331c"></script>
+  <script src="./script.js?v=20260418a"></script>
 </body>
 </html>

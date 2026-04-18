@@ -19,6 +19,7 @@ const state = {
   currentDashboardData: null,
   carouselIndex: 0,
   carouselTimer: null,
+  resetToken: new URLSearchParams(window.location.search).get("reset_token") || "",
 };
 
 const resources = [
@@ -378,6 +379,50 @@ async function handleLogin(event) {
     showToast("Login realizado com sucesso.");
     await bootstrapAuthenticated();
   } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+async function handleForgotPassword(event) {
+  event.preventDefault();
+  clearFormFeedback("password-recovery-feedback");
+  try {
+    await api("/auth/forgot-password", {
+      method: "POST",
+      body: JSON.stringify({ email: $("forgot-email").value.trim() }),
+    });
+    const message = "Se o e-mail estiver cadastrado, enviaremos um link de recuperação.";
+    setFormFeedback("password-recovery-feedback", message);
+    showToast("Verifique seu e-mail para redefinir a senha.");
+  } catch (error) {
+    setFormFeedback("password-recovery-feedback", error.message, true);
+    showToast(error.message, true);
+  }
+}
+
+async function handleResetPassword(event) {
+  event.preventDefault();
+  clearFormFeedback("password-recovery-feedback");
+  const password = $("reset-password").value.trim();
+  const confirm = $("reset-password-confirm").value.trim();
+  if (password !== confirm) {
+    setFormFeedback("password-recovery-feedback", "As senhas não conferem.", true);
+    return;
+  }
+  try {
+    const response = await api("/auth/reset-password", {
+      method: "POST",
+      body: JSON.stringify({ token: state.resetToken, password }),
+    });
+    setFormFeedback("password-recovery-feedback", response.message);
+    showToast(response.message);
+    state.resetToken = "";
+    window.history.replaceState({}, document.title, window.location.pathname);
+    $("reset-password-form").classList.add("hidden");
+    $("login-form").classList.remove("hidden");
+    $("forgot-password-btn").classList.remove("hidden");
+  } catch (error) {
+    setFormFeedback("password-recovery-feedback", error.message, true);
     showToast(error.message, true);
   }
 }
@@ -1255,6 +1300,13 @@ function bindEvents() {
   $("header-login-btn").addEventListener("click", () => showView("login-view"));
   $("back-home-btn").addEventListener("click", () => showView("public-view"));
   $("login-form").addEventListener("submit", handleLogin);
+  $("forgot-password-btn").addEventListener("click", () => {
+    $("forgot-password-form").classList.toggle("hidden");
+    $("forgot-email").value = $("login-email").value.trim();
+    clearFormFeedback("password-recovery-feedback");
+  });
+  $("forgot-password-form").addEventListener("submit", handleForgotPassword);
+  $("reset-password-form").addEventListener("submit", handleResetPassword);
   $("appointment-form").addEventListener("submit", handleAppointment);
   $("appt-date").addEventListener("change", populateAppointmentTimes);
   $("admin-main-tab-btn").addEventListener("click", () => setAdminTab("main"));
@@ -1360,6 +1412,15 @@ async function init() {
   updateEvaluationEntryMode();
   updateEvaluationFormVisibility();
   await Promise.all([loadConfig(), loadHealth()]);
+
+  if (state.resetToken) {
+    showView("login-view");
+    $("login-form").classList.add("hidden");
+    $("forgot-password-btn").classList.add("hidden");
+    $("reset-password-form").classList.remove("hidden");
+    setFormFeedback("password-recovery-feedback", "Digite uma nova senha para concluir a recuperação.");
+    return;
+  }
 
   if (state.auth?.token) {
     try {

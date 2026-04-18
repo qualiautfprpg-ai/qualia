@@ -139,22 +139,19 @@ body::before {
 .brand-mark {
   width: 44px;
   height: 44px;
-  border-radius: 16px;
+  border-radius: 14px;
   display: grid;
   place-items: center;
-  background: linear-gradient(135deg, var(--accent-strong), var(--accent));
+  background: rgba(255, 255, 255, 0.72);
   position: relative;
+  overflow: visible;
 }
 
-.brand-mark-core {
-  width: 18px;
-  height: 18px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow:
-    0 0 0 5px rgba(255, 255, 255, 0.18),
-    10px -8px 0 -6px rgba(255, 255, 255, 0.84),
-    -8px 9px 0 -7px rgba(255, 255, 255, 0.8);
+.brand-mark img {
+  width: 58px;
+  height: 58px;
+  object-fit: contain;
+  display: block;
 }
 
 .brand-block strong,
@@ -592,6 +589,23 @@ textarea:focus {
 
 .login-note {
   margin-top: 16px;
+}
+
+.link-button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--accent-strong);
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  padding: 0;
+  margin-top: 12px;
+  cursor: pointer;
+}
+
+.link-button:hover {
+  text-decoration: underline;
 }
 
 .topbar {

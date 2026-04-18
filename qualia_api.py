@@ -40,8 +40,9 @@ SMTP_CONFIG_PATH = BASE_DIR / "smtp_config.json"
 UPLOADS_DIR = BASE_DIR / "uploads" / "turmas"
 UTC = timezone.utc
 SESSION_HOURS = 12
-DEFAULT_ADMIN_EMAIL = "admin@qualia.com"
-DEFAULT_ADMIN_PASSWORD = "1234"
+LEGACY_ADMIN_EMAIL = "admin@qualia.com"
+DEFAULT_ADMIN_EMAIL = "qualiautfprpg@gmail.com"
+DEFAULT_ADMIN_PASSWORD = "qualidedevida2412"
 TEACHERS = ("Adriana Guimarães", "José Alves Faria")
 MQTT_SHARED_KEY = os.getenv("QUALIA_MQTT_KEY", "qualia-local-key")
 GOOGLE_CLIENT_ID = os.getenv("QUALIA_GOOGLE_CLIENT_ID", "")
@@ -63,6 +64,20 @@ OCR_READER = None
 class LoginInput(BaseModel):
     email: str
     password: str = Field(..., min_length=4, max_length=128)
+
+
+class ForgotPasswordInput(BaseModel):
+    email: str
+
+
+class ResetPasswordInput(BaseModel):
+    token: str = Field(..., min_length=20, max_length=256)
+    password: str = Field(..., min_length=6, max_length=128)
+
+
+class MessageResponse(BaseModel):
+    status: str
+    message: str
 
 
 class AuthResponse(BaseModel):
@@ -500,6 +515,15 @@ def init_db() -> None:
             )
             """,
             """
+            CREATE TABLE IF NOT EXISTS password_resets (
+                token TEXT PRIMARY KEY,
+                user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                used_at TEXT
+            )
+            """,
+            """
             CREATE TABLE IF NOT EXISTS appointments (
                 id BIGSERIAL PRIMARY KEY,
                 nome TEXT NOT NULL,
@@ -576,6 +600,15 @@ def init_db() -> None:
                 FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS password_resets (
+                token TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                used_at TEXT,
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS appointments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 nome TEXT NOT NULL,
@@ -615,7 +648,21 @@ def init_db() -> None:
             """
         )
 
-    admin = conn.execute("SELECT id FROM users WHERE email = ?", (DEFAULT_ADMIN_EMAIL,)).fetchone()
+    legacy_admin = conn.execute("SELECT id FROM users WHERE lower(email) = lower(?)", (LEGACY_ADMIN_EMAIL,)).fetchone()
+    if legacy_admin:
+        existing_new = conn.execute("SELECT id FROM users WHERE lower(email) = lower(?)", (DEFAULT_ADMIN_EMAIL,)).fetchone()
+        if not existing_new:
+            conn.execute(
+                "UPDATE users SET email = ?, password_hash = ?, nome = ?, role = 'admin' WHERE id = ?",
+                (
+                    DEFAULT_ADMIN_EMAIL,
+                    password_hash(DEFAULT_ADMIN_PASSWORD),
+                    "Administrador QualIA",
+                    legacy_admin["id"],
+                ),
+            )
+
+    admin = conn.execute("SELECT id FROM users WHERE lower(email) = lower(?)", (DEFAULT_ADMIN_EMAIL,)).fetchone()
     if not admin:
         conn.execute(
             """
@@ -633,6 +680,11 @@ def init_db() -> None:
                 "Conta administrativa inicial.",
                 utc_now().isoformat(),
             ),
+        )
+    else:
+        conn.execute(
+            "UPDATE users SET password_hash = ?, role = 'admin', nome = ? WHERE id = ?",
+            (password_hash(DEFAULT_ADMIN_PASSWORD), "Administrador QualIA", admin["id"]),
         )
     conn.commit()
     conn.close()
@@ -957,6 +1009,24 @@ def send_appointment_cancellation_email(appointment_row: sqlite3.Row) -> str:
         body,
         timeout=15,
     )
+
+
+def send_password_reset_email(user_row: Any, token: str) -> str:
+    reset_url = f"{os.getenv('QUALIA_PUBLIC_URL', 'https://app.qualiautfprpg.com.br').rstrip('/')}/?reset_token={token}"
+    body = "\n".join(
+        [
+            f"Olá, {user_row['nome']}.",
+            "",
+            "Recebemos uma solicitação para redefinir sua senha no QualIA.",
+            "",
+            "Clique no link abaixo para cadastrar uma nova senha:",
+            reset_url,
+            "",
+            "Este link expira em 1 hora.",
+            "Se você não solicitou essa alteração, ignore este e-mail.",
+        ]
+    )
+    return send_email_message("QualIA - redefinição de senha", [user_row["email"]], body, timeout=20)
 
 
 def build_dashboard_response_for_user(conn: sqlite3.Connection, user_id: int) -> DashboardResponse:
@@ -1739,6 +1809,16 @@ def config_root_file() -> FileResponse:
     return FileResponse(BASE_DIR / "frontend" / "config.js")
 
 
+@app.get("/logo.png")
+def logo_root_file() -> FileResponse:
+    return FileResponse(BASE_DIR / "logo.png")
+
+
+@app.get("/favicon.ico")
+def favicon_file() -> FileResponse:
+    return FileResponse(BASE_DIR / "logo.png")
+
+
 @app.get("/static/styles.css")
 def styles_file() -> FileResponse:
     return FileResponse(STATIC_DIR / "styles.css")
@@ -1747,6 +1827,11 @@ def styles_file() -> FileResponse:
 @app.get("/static/script.js")
 def script_file() -> FileResponse:
     return FileResponse(STATIC_DIR / "script.js")
+
+
+@app.get("/static/logo.png")
+def logo_static_file() -> FileResponse:
+    return FileResponse(BASE_DIR / "logo.png")
 
 
 @app.post("/auth/login", response_model=AuthResponse)
@@ -1769,6 +1854,63 @@ def logout(current: SessionUser = Depends(get_current_user), authorization: Opti
     conn.commit()
     conn.close()
     return {"status": "ok"}
+
+
+@app.post("/auth/forgot-password", response_model=MessageResponse)
+def forgot_password(payload: ForgotPasswordInput) -> MessageResponse:
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM users WHERE lower(email) = lower(?)", (payload.email,)).fetchone()
+    if row:
+        token = secrets.token_urlsafe(40)
+        now = utc_now()
+        expires = now + timedelta(hours=1)
+        conn.execute("DELETE FROM password_resets WHERE user_id = ? OR expires_at < ?", (row["id"], now.isoformat()))
+        conn.execute(
+            "INSERT INTO password_resets (token, user_id, created_at, expires_at, used_at) VALUES (?, ?, ?, ?, NULL)",
+            (token, row["id"], now.isoformat(), expires.isoformat()),
+        )
+        conn.commit()
+        try:
+            send_password_reset_email(row, token)
+        except Exception as exc:
+            conn.close()
+            raise HTTPException(status_code=500, detail=f"Não foi possível enviar o e-mail de recuperação: {exc}") from exc
+    conn.close()
+    return MessageResponse(
+        status="ok",
+        message="Se o e-mail estiver cadastrado, enviaremos um link para redefinir a senha.",
+    )
+
+
+@app.post("/auth/reset-password", response_model=MessageResponse)
+def reset_password(payload: ResetPasswordInput) -> MessageResponse:
+    conn = get_conn()
+    reset = conn.execute(
+        """
+        SELECT pr.*, u.email, u.nome
+        FROM password_resets pr
+        JOIN users u ON u.id = pr.user_id
+        WHERE pr.token = ?
+        """,
+        (payload.token,),
+    ).fetchone()
+    if not reset:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Link de recuperação inválido.")
+    if reset["used_at"]:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Este link de recuperação já foi utilizado.")
+    if datetime.fromisoformat(reset["expires_at"]) < utc_now():
+        conn.close()
+        raise HTTPException(status_code=400, detail="Este link de recuperação expirou.")
+
+    now = utc_now().isoformat()
+    conn.execute("UPDATE users SET password_hash = ? WHERE id = ?", (password_hash(payload.password), reset["user_id"]))
+    conn.execute("UPDATE password_resets SET used_at = ? WHERE token = ?", (now, payload.token))
+    conn.execute("DELETE FROM sessions WHERE user_id = ?", (reset["user_id"],))
+    conn.commit()
+    conn.close()
+    return MessageResponse(status="ok", message="Senha alterada com sucesso. Entre novamente com a nova senha.")
 
 
 @app.get("/admin/users", response_model=List[UserSummary])
