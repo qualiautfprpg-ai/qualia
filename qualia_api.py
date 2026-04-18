@@ -837,6 +837,7 @@ def send_email_message(subject: str, recipients: List[str], body: str, timeout: 
             headers={
                 "Authorization": f"Bearer {resend_settings['api_key']}",
                 "Content-Type": "application/json",
+                "User-Agent": "QualIA/1.0 (https://qualiautfprpg.com.br)",
             },
             method="POST",
         )
