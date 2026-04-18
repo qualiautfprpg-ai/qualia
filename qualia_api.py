@@ -174,6 +174,7 @@ class ResultsEmailResponse(BaseModel):
     recipient_email: str
     scope: str
     message: str
+    error_detail: Optional[str] = None
 
 
 class ConfigResponse(BaseModel):
@@ -829,9 +830,13 @@ def send_email_message(subject: str, recipients: List[str], body: str, timeout: 
             },
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            if response.status >= 400:
-                raise RuntimeError(f"Erro no Resend: HTTP {response.status}")
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                if response.status >= 400:
+                    raise RuntimeError(f"Erro no Resend: HTTP {response.status}")
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Erro no Resend: HTTP {exc.code} - {detail}") from exc
         return "enviado"
 
     smtp_settings = load_smtp_settings()
@@ -2180,10 +2185,12 @@ def email_my_results(
     dashboard = build_dashboard_response_for_user(conn, current.user_id)
     conn.close()
     recipient_email = payload.recipient_email or dashboard.usuario.email
+    error_detail = None
     try:
         status = send_results_email(dashboard, recipient_email, scope)
-    except Exception:
+    except Exception as exc:
         status = "falha_no_envio"
+        error_detail = str(exc)
     message = (
         "Resultado mais recente enviado por e-mail."
         if scope == "latest"
@@ -2193,11 +2200,14 @@ def email_my_results(
         message = "O serviço de e-mail ainda precisa estar configurado para enviar os resultados."
     elif status == "falha_no_envio":
         message = "Houve falha no envio do e-mail com os resultados."
+        if error_detail:
+            message = f"{message} Detalhe: {error_detail}"
     return ResultsEmailResponse(
         status=status,
         recipient_email=recipient_email,
         scope=scope,
         message=message,
+        error_detail=error_detail,
     )
 
 
@@ -2214,10 +2224,12 @@ def email_user_results_as_admin(
     dashboard = build_dashboard_response_for_user(conn, user_id)
     conn.close()
     recipient_email = payload.recipient_email or dashboard.usuario.email
+    error_detail = None
     try:
         status = send_results_email(dashboard, recipient_email, scope)
-    except Exception:
+    except Exception as exc:
         status = "falha_no_envio"
+        error_detail = str(exc)
     message = (
         "Resultado mais recente enviado por e-mail."
         if scope == "latest"
@@ -2227,11 +2239,14 @@ def email_user_results_as_admin(
         message = "O serviço de e-mail ainda precisa estar configurado para enviar os resultados."
     elif status == "falha_no_envio":
         message = "Houve falha no envio do e-mail com os resultados."
+        if error_detail:
+            message = f"{message} Detalhe: {error_detail}"
     return ResultsEmailResponse(
         status=status,
         recipient_email=recipient_email,
         scope=scope,
         message=message,
+        error_detail=error_detail,
     )
 
 
