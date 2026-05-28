@@ -230,6 +230,11 @@ function setMetricBar(fillId, labelId, value, maxValue, suffix = "") {
   $(labelId).textContent = value == null || Number.isNaN(value) ? "--" : `${safeValue.toFixed(1)}${suffix}`;
 }
 
+function formatMetricValue(value, suffix = "", digits = 1) {
+  if (value == null || Number.isNaN(Number(value))) return "--";
+  return `${Number(value).toFixed(digits)}${suffix}`;
+}
+
 function renderWeeklyPlan(plan, userId) {
   const container = $("weekly-plan-list");
   if (!plan.length || !userId) {
@@ -1121,6 +1126,13 @@ function renderDashboard(data) {
     $("bf-class").textContent = "-";
     $("pressao-value").textContent = "--";
     $("pressao-class").textContent = "-";
+    $("bio-peso-value").textContent = "--";
+    $("bio-bf-value").textContent = "--";
+    $("bio-agua-value").textContent = "--";
+    $("bio-muscle-value").textContent = "--";
+    $("bio-bmr-value").textContent = "--";
+    $("bio-metabolic-age-value").textContent = "--";
+    $("bio-bone-value").textContent = "--";
     createListItems("pontos-fortes", ["Sem avaliação ainda."]);
     createListItems("pontos-fracos", ["Assim que um teste for salvo, a leitura da IA aparecerá aqui."]);
     createListItems("recomendacoes", ["Cadastre uma avaliação pelo painel do administrador."]);
@@ -1149,6 +1161,13 @@ function renderDashboard(data) {
     ? `${latest.payload.pressao_sist}/${latest.payload.pressao_diast}`
     : "--";
   $("pressao-class").textContent = result.pressao_class;
+  $("bio-peso-value").textContent = formatMetricValue(latest.payload.peso, " kg");
+  $("bio-bf-value").textContent = formatMetricValue(latest.payload.bf, "%");
+  $("bio-agua-value").textContent = formatMetricValue(latest.payload.agua, "%");
+  $("bio-muscle-value").textContent = formatMetricValue(latest.payload.massa_muscular, "%");
+  $("bio-bmr-value").textContent = formatMetricValue(latest.payload.bmr, " kcal", 0);
+  $("bio-metabolic-age-value").textContent = formatMetricValue(latest.payload.idade_metabolica, " anos", 0);
+  $("bio-bone-value").textContent = formatMetricValue(latest.payload.massa_ossea, " kg");
 
   createListItems("pontos-fortes", result.pontos_fortes);
   createListItems("pontos-fracos", result.pontos_fracos);
