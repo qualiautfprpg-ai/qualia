@@ -18,13 +18,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import joblib
-import pandas as pd
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-import fitz
 try:
     import psycopg
 except Exception:  # pragma: no cover - optional local dependency
@@ -55,10 +53,26 @@ if not MODEL_PATH.exists():
         "Execute qualia_train.py antes de iniciar a API."
     )
 
-model_bundle = joblib.load(MODEL_PATH)
-pipeline = model_bundle["pipeline"]
-feature_cols = model_bundle["feature_cols"]
+pipeline = None
+feature_cols: List[str] = []
 OCR_READER = None
+
+
+def ensure_model_loaded() -> Tuple[Any, List[str]]:
+    global pipeline, feature_cols
+    import joblib
+
+    if pipeline is not None and feature_cols:
+        return pipeline, feature_cols
+    if not MODEL_PATH.exists():
+        raise FileNotFoundError(
+            f"Arquivo de modelo nÃ£o encontrado em {MODEL_PATH}. "
+            "Execute qualia_train.py antes de iniciar a API."
+        )
+    model_bundle = joblib.load(MODEL_PATH)
+    pipeline = model_bundle["pipeline"]
+    feature_cols = model_bundle["feature_cols"]
+    return pipeline, feature_cols
 
 
 class LoginInput(BaseModel):
@@ -1276,8 +1290,11 @@ def evaluate_user(user_row: sqlite3.Row, payload: EvaluationInput) -> Evaluation
         "Cooper_km": payload.cooper or 0.0,
         "IMC": imc,
     }
-    X = pd.DataFrame([{col: features.get(col, 0.0) for col in feature_cols}])
-    score = float(pipeline.predict(X)[0])
+    import pandas as pd
+
+    model_pipeline, model_feature_cols = ensure_model_loaded()
+    X = pd.DataFrame([{col: features.get(col, 0.0) for col in model_feature_cols}])
+    score = float(model_pipeline.predict(X)[0])
     imc_class = classificar_imc(imc)
     bf_class = classificar_bf(payload.bf, user_row["sexo"] or "m", idade)
     vo2_class = classificar_vo2(vo2_est, user_row["sexo"] or "m")
@@ -1479,6 +1496,8 @@ def get_ocr_reader():
 
 
 def extract_roster_from_pdf_bytes(file_bytes: bytes) -> List[Tuple[str, Optional[str]]]:
+    import fitz
+
     with tempfile.TemporaryDirectory() as tmp_dir:
         pdf_path = Path(tmp_dir) / "turma.pdf"
         pdf_path.write_bytes(file_bytes)
