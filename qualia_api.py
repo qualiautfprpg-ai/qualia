@@ -1079,9 +1079,107 @@ def build_dashboard_response_for_user(conn: sqlite3.Connection, user_id: int) ->
     )
 
 
-def build_result_email_lines(record: EvaluationRecord) -> List[str]:
+def normalize_user_sex(sexo: Optional[str]) -> str:
+    raw = (sexo or "").strip().lower()
+    if raw.startswith("f"):
+        return "f"
+    return "m"
+
+
+def classify_body_water(value: Optional[float], sexo: Optional[str]) -> Tuple[str, str]:
+    if value is None:
+        return "Não informado", "Faixa de referência indisponível."
+    if normalize_user_sex(sexo) == "f":
+        low, high = 45.0, 60.0
+        ref = "Referência adulta feminina: 45% a 60%."
+    else:
+        low, high = 50.0, 65.0
+        ref = "Referência adulta masculina: 50% a 65%."
+    if value < low:
+        return "Abaixo do ideal", ref
+    if value > high:
+        return "Acima da faixa de referência", ref
+    return "Dentro da faixa esperada", ref
+
+
+def classify_muscle_percentage(value: Optional[float], sexo: Optional[str]) -> Tuple[str, str]:
+    if value is None:
+        return "Não informado", "Faixa orientativa indisponível."
+    if normalize_user_sex(sexo) == "f":
+        low, high = 24.0, 30.0
+        ref = "Faixa orientativa do sistema para mulheres adultas: 24% a 30%."
+    else:
+        low, high = 33.0, 39.0
+        ref = "Faixa orientativa do sistema para homens adultos: 33% a 39%."
+    if value < low:
+        return "Baixa", ref
+    if value > high:
+        return "Acima da mÃ©dia", ref
+    return "Adequada", ref
+
+
+def classify_bmr(value: Optional[float], idade_metabolica: Optional[float], idade_real: Optional[int]) -> Tuple[str, str]:
+    if value is None:
+        return "Não informado", "Use este valor como referência do gasto em repouso."
+    if idade_metabolica is not None and idade_real is not None:
+        if idade_metabolica <= idade_real:
+            return "Compatível com bom gasto basal", "A idade metabólica ficou igual ou abaixo da idade cronológica."
+        if idade_metabolica <= idade_real + 5:
+            return "Levemente abaixo do ideal", "A idade metabólica ficou um pouco acima da idade cronológica."
+        return "Atenção para melhorar o metabolismo", "A idade metabólica ficou bem acima da idade cronológica."
+        return "Valor basal estimado", "O ideal depende de sexo, idade, altura, peso e quantidade de massa magra."
+
+
+def classify_metabolic_age(value: Optional[float], idade_real: Optional[int]) -> Tuple[str, str]:
+    if value is None:
+        return "Não informado", "Sem comparação disponível."
+    if idade_real is None:
+        return "Valor estimado", "Compare este número com a idade cronológica da pessoa."
+    if value <= idade_real:
+        return "Boa resposta metabólica", "Idade metabólica igual ou abaixo da idade cronológica."
+    if value <= idade_real + 5:
+        return "Levemente acima do ideal", "Idade metabólica pouco acima da idade cronológica."
+    return "Acima do ideal", "Idade metabólica acima da idade cronológica; vale investir em rotina e condicionamento."
+
+
+def classify_bone_mass(value: Optional[float], sexo: Optional[str], peso: Optional[float]) -> Tuple[str, str]:
+    if value is None or peso is None:
+        return "Não informado", "Sem comparação disponível."
+    if normalize_user_sex(sexo) == "f":
+        if peso < 50:
+            reference = 1.95
+            ref_text = "Referência média feminina: 1,95 kg para menos de 50 kg."
+        elif peso <= 75:
+            reference = 2.40
+            ref_text = "Referência média feminina: 2,40 kg entre 50 e 75 kg."
+        else:
+            reference = 2.95
+            ref_text = "Referência média feminina: 2,95 kg acima de 75 kg."
+    else:
+        if peso < 65:
+            reference = 2.66
+            ref_text = "Referência média masculina: 2,66 kg para menos de 65 kg."
+        elif peso <= 95:
+            reference = 3.29
+            ref_text = "Referência média masculina: 3,29 kg entre 65 e 95 kg."
+        else:
+            reference = 3.69
+            ref_text = "Referência média masculina: 3,69 kg acima de 95 kg."
+    if value < reference - 0.2:
+        return "Abaixo da média de referência", ref_text
+    if value > reference + 0.2:
+        return "Acima da média de referência", ref_text
+    return "Próxima da média de referência", ref_text
+
+
+def build_result_email_lines(record: EvaluationRecord, user: UserSummary) -> List[str]:
     payload = record.payload
     resultado = record.resultado
+    body_water_status, body_water_ref = classify_body_water(payload.get("agua"), user.sexo)
+    muscle_status, muscle_ref = classify_muscle_percentage(payload.get("massa_muscular"), user.sexo)
+    bmr_status, bmr_ref = classify_bmr(payload.get("bmr"), payload.get("idade_metabolica"), user.idade)
+    metabolic_age_status, metabolic_age_ref = classify_metabolic_age(payload.get("idade_metabolica"), user.idade)
+    bone_status, bone_ref = classify_bone_mass(payload.get("massa_ossea"), user.sexo, payload.get("peso"))
     lines = [
         f"Data da avaliação: {record.created_at}",
         f"Tipo da avaliação: {record.tipo_avaliacao}",
@@ -1092,6 +1190,20 @@ def build_result_email_lines(record: EvaluationRecord) -> List[str]:
         f"VO2 estimado: {resultado.vo2_est:.1f}" if resultado.vo2_est is not None else "VO2 estimado: -",
         f"Classificação do VO2: {resultado.vo2_class}",
         f"Pressão arterial: {resultado.pressao_class}",
+        "",
+        "Bioimpedância detalhada:",
+        f"- Peso: {payload.get('peso') if payload.get('peso') is not None else '-'} kg",
+        f"- % Gordura: {payload.get('bf') if payload.get('bf') is not None else '-'}% ({resultado.bf_class})",
+        f"- % Água: {payload.get('agua') if payload.get('agua') is not None else '-'}% ({body_water_status})",
+        f"  {body_water_ref}",
+        f"- % Massa muscular: {payload.get('massa_muscular') if payload.get('massa_muscular') is not None else '-'}% ({muscle_status})",
+        f"  {muscle_ref}",
+        f"- BMR: {payload.get('bmr') if payload.get('bmr') is not None else '-'} kcal/dia ({bmr_status})",
+        f"  {bmr_ref}",
+        f"- Idade metabólica: {payload.get('idade_metabolica') if payload.get('idade_metabolica') is not None else '-'} anos ({metabolic_age_status})",
+        f"  {metabolic_age_ref}",
+        f"- Massa óssea: {payload.get('massa_ossea') if payload.get('massa_ossea') is not None else '-'} kg ({bone_status})",
+        f"  {bone_ref}",
         "",
         "Pontos fortes:",
     ]
@@ -1132,7 +1244,7 @@ def send_results_email(dashboard: DashboardResponse, recipient_email: str, scope
     for index, record in enumerate(records, start=1):
         body_lines.append(f"Resultado {index}")
         body_lines.append("-" * 24)
-        body_lines.extend(build_result_email_lines(record))
+        body_lines.extend(build_result_email_lines(record, dashboard.usuario))
     return send_email_message(subject, [recipient_email], "\n".join(body_lines), timeout=20)
 
 
