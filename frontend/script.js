@@ -242,6 +242,63 @@ function setBioExplanation(id, summary, example) {
   if (exampleEl) exampleEl.textContent = example;
 }
 
+function getSexLabel(sexo) {
+  return String(sexo || "").toLowerCase().startsWith("f") ? "mulheres" : "homens";
+}
+
+function getMuscleReference(sexo, idade) {
+  const female = String(sexo || "").toLowerCase().startsWith("f");
+  const age = Number(idade);
+  if (!Number.isFinite(age)) return female
+    ? { min: 40, max: 44, label: "18 a 35 anos" }
+    : { min: 40, max: 44, label: "18 a 35 anos" };
+  if (age <= 35) return { min: 40, max: 44, label: "18 a 35 anos" };
+  if (age <= 55) return { min: 36, max: 40, label: "36 a 55 anos" };
+  if (female) return { min: 25, max: 32, label: "56 a 75 anos" };
+  return { min: 32, max: 35, label: "56 a 75 anos" };
+}
+
+function getLeanMassReference(sexo) {
+  return String(sexo || "").toLowerCase().startsWith("f")
+    ? { min: 70, max: 85 }
+    : { min: 75, max: 85 };
+}
+
+function getBodyFatIdealReference(sexo) {
+  return String(sexo || "").toLowerCase().startsWith("f")
+    ? { min: 15, max: 28 }
+    : { min: 10, max: 20 };
+}
+
+function getBoneReference(sexo, peso) {
+  const weight = Number(peso);
+  if (!Number.isFinite(weight)) return null;
+  const female = String(sexo || "").toLowerCase().startsWith("f");
+  if (female) {
+    if (weight < 50) return { value: 1.95, label: "mulheres abaixo de 50 kg" };
+    if (weight <= 75) return { value: 2.4, label: "mulheres entre 50 e 75 kg" };
+    return { value: 2.95, label: "mulheres acima de 75 kg" };
+  }
+  if (weight < 65) return { value: 2.66, label: "homens abaixo de 65 kg" };
+  if (weight <= 95) return { value: 3.29, label: "homens entre 65 e 95 kg" };
+  return { value: 3.69, label: "homens acima de 95 kg" };
+}
+
+function compareRange(value, min, max) {
+  if (value < min) return `abaixo do ideal por ${(min - value).toFixed(1)} ponto(s) percentual(is)`;
+  if (value > max) return `acima do ideal por ${(value - max).toFixed(1)} ponto(s) percentual(is)`;
+  return "dentro da faixa ideal";
+}
+
+function estimateBmrByProfile(sexo, idade, peso, alturaCm) {
+  const age = Number(idade);
+  const weight = Number(peso);
+  const height = Number(alturaCm);
+  if (![age, weight, height].every(Number.isFinite)) return null;
+  const female = String(sexo || "").toLowerCase().startsWith("f");
+  return 10 * weight + 6.25 * height - 5 * age + (female ? -161 : 5);
+}
+
 function getBodyWaterInterpretation(value, sexo) {
   if (value == null) {
     return {
@@ -270,47 +327,6 @@ function getBodyWaterInterpretation(value, sexo) {
   };
 }
 
-function getMuscleInterpretation(value, sexo) {
-  if (value == null) {
-    return {
-      summary: "Mostra a participação estimada dos músculos no corpo. Sem esse dado, não dá para comentar a massa muscular.",
-      example: "Exemplo: quanto maior a participação muscular, maior tende a ser a presença de massa magra no corpo.",
-    };
-  }
-  const female = String(sexo || "").toLowerCase().startsWith("f");
-  const min = female ? 24 : 33;
-  const max = female ? 30 : 39;
-  if (value < min) {
-    return {
-      summary: `Seu resultado foi ${value.toFixed(1)}%, abaixo da faixa orientativa usada pelo sistema (${min}% a ${max}%). Isso pode indicar baixa participação muscular na composição corporal.`,
-      example: "Exemplo: quando esse valor fica menor, o foco costuma ser ganhar força e melhorar a massa magra ao longo do tempo.",
-    };
-  }
-  if (value > max) {
-    return {
-      summary: `Seu resultado foi ${value.toFixed(1)}%, acima da faixa orientativa (${min}% a ${max}%). Em geral, isso sugere uma participação muscular acima da média esperada.`,
-      example: "Exemplo: esse tipo de resultado costuma aparecer com mais frequência em pessoas mais treinadas ou com mais massa magra.",
-    };
-  }
-  return {
-    summary: `Seu resultado foi ${value.toFixed(1)}%, dentro da faixa orientativa (${min}% a ${max}%). Isso sugere uma participação muscular mais adequada.`,
-    example: "Exemplo: ficar nessa faixa indica uma composição corporal mais equilibrada do ponto de vista muscular.",
-  };
-}
-
-function getBmrInterpretation(value) {
-  if (value == null) {
-    return {
-      summary: "O BMR é a energia que o corpo gasta para manter funções básicas, mesmo em repouso. Sem esse dado, não dá para comentar o gasto basal.",
-      example: "Exemplo: respirar, manter a circulação e a temperatura corporal fazem parte desse gasto.",
-    };
-  }
-  return {
-    summary: `Seu BMR foi ${value.toFixed(0)} kcal/dia. Isso significa a energia aproximada que o corpo precisaria em um dia mesmo sem exercício.`,
-    example: "Exemplo: esse valor não é 'bom' ou 'ruim' sozinho, porque depende de idade, peso, altura e quantidade de massa magra.",
-  };
-}
-
 function getMetabolicAgeInterpretation(value, idadeReal) {
   if (value == null) {
     return {
@@ -336,19 +352,6 @@ function getMetabolicAgeInterpretation(value, idadeReal) {
   };
 }
 
-function getBoneInterpretation(value) {
-  if (value == null) {
-    return {
-      summary: "A massa óssea é uma estimativa do peso mineral dos ossos dentro da composição corporal. Sem esse dado, não há leitura específica.",
-      example: "Exemplo: esse número não substitui exames clínicos dos ossos, mas ajuda a compor a visão geral do corpo.",
-    };
-  }
-  return {
-    summary: `Seu resultado foi ${value.toFixed(1)} kg. Esse número representa uma estimativa do peso dos ossos dentro da composição corporal e deve ser visto como referência, não como diagnóstico isolado.`,
-    example: "Exemplo: ele faz mais sentido quando analisado junto com peso, massa muscular e histórico de avaliações.",
-  };
-}
-
 function getWeightInterpretation(value, imcClass) {
   if (value == null) {
     return {
@@ -362,16 +365,103 @@ function getWeightInterpretation(value, imcClass) {
   };
 }
 
-function getBodyFatInterpretation(value, classification) {
+function getMuscleInterpretation(value, sexo, idade, peso, bf) {
   if (value == null) {
     return {
-      summary: "Esse indicador mostra quanto do corpo é formado por gordura. Sem esse dado, não há leitura da composição de gordura.",
-      example: "Exemplo: o percentual de gordura ajuda a entender melhor o corpo do que olhar só o peso isolado.",
+      summary: "Mostra a participacao estimada dos musculos no corpo. Sem esse dado, nao da para comentar a massa muscular.",
+      example: "Exemplo: quanto maior a participacao muscular, maior tende a ser a presenca de massa magra no corpo.",
+    };
+  }
+  const ref = getMuscleReference(sexo, idade);
+  const leanRef = getLeanMassReference(sexo);
+  const leanPercent = bf != null ? 100 - Number(bf) : null;
+  const muscleMassKg = peso != null ? (Number(peso) * value) / 100 : null;
+  const kgText = Number.isFinite(muscleMassKg) ? ` Em peso, isso representa cerca de ${muscleMassKg.toFixed(1)} kg de musculos.` : "";
+  const leanText = Number.isFinite(leanPercent) ? ` A massa magra estimada ficou em ${leanPercent.toFixed(1)}% do peso, contra a faixa de ${leanRef.min}% a ${leanRef.max}% para ${getSexLabel(sexo)}.` : "";
+  const status = compareRange(value, ref.min, ref.max);
+  return {
+    summary: `Seu resultado foi ${value.toFixed(1)}%, ${status}. A referencia usada aqui e ${ref.min}% a ${ref.max}% para ${getSexLabel(sexo)} de ${ref.label}.${kgText}${leanText}`,
+    example: value < ref.min
+      ? "Leitura: vale priorizar treino de forca e proteina adequada, olhando a evolucao junto com peso, gordura e agua corporal."
+      : "Leitura: acompanhe se essa massa muscular se mantem junto com gordura corporal, hidratacao e desempenho fisico.",
+  };
+}
+
+function getBmrInterpretation(value, user, payload) {
+  if (value == null) {
+    return {
+      summary: "O BMR e a energia que o corpo gasta para manter funcoes basicas, mesmo em repouso. Sem esse dado, nao da para comentar o gasto basal.",
+      example: "Exemplo: respirar, manter a circulacao e a temperatura corporal fazem parte desse gasto.",
+    };
+  }
+  const expected = estimateBmrByProfile(user.sexo, user.idade, payload.peso, user.altura_cm);
+  const leanMass = payload.bf != null && payload.peso != null ? Number(payload.peso) * (1 - Number(payload.bf) / 100) : null;
+  const leanBmr = Number.isFinite(leanMass) ? 370 + 21.6 * leanMass : null;
+  if (expected != null) {
+    const diff = value - expected;
+    const diffPercent = (diff / expected) * 100;
+    const status = Math.abs(diffPercent) <= 10
+      ? "compativel com o esperado"
+      : diffPercent < 0
+        ? "abaixo do estimado pelo perfil"
+        : "acima do estimado pelo perfil";
+    const leanText = leanBmr != null
+      ? ` Pela massa magra estimada (${leanMass.toFixed(1)} kg), outra estimativa fica perto de ${leanBmr.toFixed(0)} kcal/dia.`
+      : "";
+    return {
+      summary: `Seu BMR foi ${value.toFixed(0)} kcal/dia. Para ${user.idade ?? "-"} anos, ${formatMetricValue(payload.peso, " kg")} e ${user.altura_cm ?? "-"} cm, a estimativa de repouso fica perto de ${expected.toFixed(0)} kcal/dia; seu valor esta ${status} (${diff >= 0 ? "+" : ""}${diff.toFixed(0)} kcal, ${diffPercent >= 0 ? "+" : ""}${diffPercent.toFixed(1)}%).${leanText}`,
+      example: "Leitura: BMR nao e meta de dieta; e o gasto de repouso. Para planejar consumo diario, ainda entram atividade fisica, objetivo e acompanhamento profissional.",
     };
   }
   return {
-    summary: `Seu resultado foi ${value.toFixed(1)}%. Pela referência usada no sistema, isso foi classificado como ${classification}.`,
-    example: "Exemplo: esse número ajuda a diferenciar se o peso está vindo mais de gordura, músculos, água e outros componentes do corpo.",
+    summary: `Seu BMR foi ${value.toFixed(0)} kcal/dia. Isso significa a energia aproximada que o corpo precisaria em um dia mesmo sem exercicio.`,
+    example: "Exemplo: informe idade, sexo, peso e altura para comparar esse valor com uma estimativa individual.",
+  };
+}
+
+function getBoneInterpretation(value, sexo, peso, massaMuscular, bf) {
+  if (value == null) {
+    return {
+      summary: "A massa ossea e uma estimativa do peso mineral dos ossos dentro da composicao corporal. Sem esse dado, nao ha leitura especifica.",
+      example: "Exemplo: esse numero nao substitui exames clinicos dos ossos, mas ajuda a compor a visao geral do corpo.",
+    };
+  }
+  const ref = getBoneReference(sexo, peso);
+  const bonePercent = peso != null ? (Number(value) / Number(peso)) * 100 : null;
+  const muscleText = massaMuscular != null ? ` massa muscular de ${Number(massaMuscular).toFixed(1)}%` : " massa muscular nao informada";
+  const fatText = bf != null ? ` e gordura de ${Number(bf).toFixed(1)}%` : "";
+  if (ref && Number.isFinite(bonePercent)) {
+    const diff = value - ref.value;
+    const status = Math.abs(diff) <= 0.2
+      ? "proximo da referencia"
+      : diff < 0
+        ? "abaixo da referencia"
+        : "acima da referencia";
+    return {
+      summary: `Seu resultado foi ${value.toFixed(1)} kg, ${status} para ${ref.label} (media ${ref.value.toFixed(2)} kg; diferenca ${diff >= 0 ? "+" : ""}${diff.toFixed(1)} kg). Isso equivale a ${bonePercent.toFixed(1)}% do peso corporal e foi analisado junto com${muscleText}${fatText}.`,
+      example: "Leitura: se a massa ossea vier baixa junto com pouca massa muscular ou baixo peso, o alerta e maior; se vier isolada, use como referencia de acompanhamento, nao diagnostico.",
+    };
+  }
+  return {
+    summary: `Seu resultado foi ${value.toFixed(1)} kg. Informe o peso para comparar com a referencia por sexo e faixa de peso.`,
+    example: "Leitura: massa ossea faz mais sentido junto com peso, massa muscular, gordura corporal e historico de avaliacoes.",
+  };
+}
+
+function getBodyFatInterpretation(value, classification, sexo, idade, peso) {
+  if (value == null) {
+    return {
+      summary: "Esse indicador mostra quanto do corpo e formado por gordura. Sem esse dado, nao ha leitura da composicao de gordura.",
+      example: "Exemplo: o percentual de gordura ajuda a entender melhor o corpo do que olhar so o peso isolado.",
+    };
+  }
+  const ref = getBodyFatIdealReference(sexo);
+  const fatKg = peso != null ? (Number(peso) * value) / 100 : null;
+  const status = compareRange(value, ref.min, ref.max);
+  const kgText = Number.isFinite(fatKg) ? ` Em peso, isso equivale a cerca de ${fatKg.toFixed(1)} kg de gordura corporal.` : "";
+  return {
+    summary: `Seu resultado foi ${value.toFixed(1)}%, ${status}; a faixa geral usada e ${ref.min}% a ${ref.max}% para ${getSexLabel(sexo)}. No classificador por idade do sistema, isso aparece como ${classification}.${kgText}`,
+    example: "Leitura: este e um dos indicadores centrais para meta corporal, porque mostra se o peso vem mais de gordura ou de massa magra.",
   };
 }
 
@@ -1316,12 +1406,12 @@ function renderDashboard(data) {
   $("bio-metabolic-age-value").textContent = formatMetricValue(latest.payload.idade_metabolica, " anos", 0);
   $("bio-bone-value").textContent = formatMetricValue(latest.payload.massa_ossea, " kg");
   const weightInfo = getWeightInterpretation(latest.payload.peso, result.imc_class);
-  const bfInfo = getBodyFatInterpretation(latest.payload.bf, result.bf_class);
+  const bfInfo = getBodyFatInterpretation(latest.payload.bf, result.bf_class, user.sexo, user.idade, latest.payload.peso);
   const waterInfo = getBodyWaterInterpretation(latest.payload.agua, user.sexo);
-  const muscleInfo = getMuscleInterpretation(latest.payload.massa_muscular, user.sexo);
-  const bmrInfo = getBmrInterpretation(latest.payload.bmr);
+  const muscleInfo = getMuscleInterpretation(latest.payload.massa_muscular, user.sexo, user.idade, latest.payload.peso, latest.payload.bf);
+  const bmrInfo = getBmrInterpretation(latest.payload.bmr, user, latest.payload);
   const metabolicAgeInfo = getMetabolicAgeInterpretation(latest.payload.idade_metabolica, user.idade);
-  const boneInfo = getBoneInterpretation(latest.payload.massa_ossea);
+  const boneInfo = getBoneInterpretation(latest.payload.massa_ossea, user.sexo, latest.payload.peso, latest.payload.massa_muscular, latest.payload.bf);
   setBioExplanation("peso", weightInfo.summary, weightInfo.example);
   setBioExplanation("bf", bfInfo.summary, bfInfo.example);
   setBioExplanation("agua", waterInfo.summary, waterInfo.example);

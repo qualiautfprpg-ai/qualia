@@ -1086,6 +1086,36 @@ def normalize_user_sex(sexo: Optional[str]) -> str:
     return "m"
 
 
+def muscle_reference_by_profile(sexo: Optional[str], idade: Optional[int]) -> Tuple[float, float, str]:
+    age = idade or 0
+    female = normalize_user_sex(sexo) == "f"
+    if age <= 35:
+        return 40.0, 44.0, "18 a 35 anos"
+    if age <= 55:
+        return 36.0, 40.0, "36 a 55 anos"
+    if female:
+        return 25.0, 32.0, "56 a 75 anos"
+    return 32.0, 35.0, "56 a 75 anos"
+
+
+def lean_mass_reference_by_profile(sexo: Optional[str]) -> Tuple[float, float]:
+    if normalize_user_sex(sexo) == "f":
+        return 70.0, 85.0
+    return 75.0, 85.0
+
+
+def expected_bmr_by_profile(
+    sexo: Optional[str],
+    idade: Optional[int],
+    peso: Optional[float],
+    altura_cm: Optional[float],
+) -> Optional[float]:
+    if idade is None or peso is None or altura_cm is None:
+        return None
+    offset = -161 if normalize_user_sex(sexo) == "f" else 5
+    return 10 * peso + 6.25 * altura_cm - 5 * idade + offset
+
+
 def classify_body_water(value: Optional[float], sexo: Optional[str]) -> Tuple[str, str]:
     if value is None:
         return "Não informado", "Faixa de referência indisponível."
@@ -1100,34 +1130,6 @@ def classify_body_water(value: Optional[float], sexo: Optional[str]) -> Tuple[st
     if value > high:
         return "Acima da faixa de referência", ref
     return "Dentro da faixa esperada", ref
-
-
-def classify_muscle_percentage(value: Optional[float], sexo: Optional[str]) -> Tuple[str, str]:
-    if value is None:
-        return "Não informado", "Faixa orientativa indisponível."
-    if normalize_user_sex(sexo) == "f":
-        low, high = 24.0, 30.0
-        ref = "Faixa orientativa do sistema para mulheres adultas: 24% a 30%."
-    else:
-        low, high = 33.0, 39.0
-        ref = "Faixa orientativa do sistema para homens adultos: 33% a 39%."
-    if value < low:
-        return "Baixa", ref
-    if value > high:
-        return "Acima da mÃ©dia", ref
-    return "Adequada", ref
-
-
-def classify_bmr(value: Optional[float], idade_metabolica: Optional[float], idade_real: Optional[int]) -> Tuple[str, str]:
-    if value is None:
-        return "Não informado", "Use este valor como referência do gasto em repouso."
-    if idade_metabolica is not None and idade_real is not None:
-        if idade_metabolica <= idade_real:
-            return "Compatível com bom gasto basal", "A idade metabólica ficou igual ou abaixo da idade cronológica."
-        if idade_metabolica <= idade_real + 5:
-            return "Levemente abaixo do ideal", "A idade metabólica ficou um pouco acima da idade cronológica."
-        return "Atenção para melhorar o metabolismo", "A idade metabólica ficou bem acima da idade cronológica."
-        return "Valor basal estimado", "O ideal depende de sexo, idade, altura, peso e quantidade de massa magra."
 
 
 def classify_metabolic_age(value: Optional[float], idade_real: Optional[int]) -> Tuple[str, str]:
@@ -1172,12 +1174,94 @@ def classify_bone_mass(value: Optional[float], sexo: Optional[str], peso: Option
     return "Próxima da média de referência", ref_text
 
 
+def classify_muscle_percentage(
+    value: Optional[float],
+    sexo: Optional[str],
+    idade: Optional[int] = None,
+    peso: Optional[float] = None,
+    bf: Optional[float] = None,
+) -> Tuple[str, str]:
+    if value is None:
+        return "Nao informado", "Faixa orientativa indisponivel."
+    low, high, age_label = muscle_reference_by_profile(sexo, idade)
+    lean_low, lean_high = lean_mass_reference_by_profile(sexo)
+    sex_label = "mulheres" if normalize_user_sex(sexo) == "f" else "homens"
+    status = "Adequada"
+    if value < low:
+        status = "Abaixo do ideal"
+    elif value > high:
+        status = "Acima do ideal"
+    parts = [
+        f"Referencia: {low:.0f}% a {high:.0f}% para {sex_label} de {age_label}.",
+    ]
+    if peso is not None:
+        parts.append(f"Estimativa em kg: {(peso * value / 100):.1f} kg de musculos.")
+    if bf is not None:
+        lean_percent = 100 - bf
+        parts.append(
+            f"Massa magra estimada: {lean_percent:.1f}% do peso; referencia usual: {lean_low:.0f}% a {lean_high:.0f}%."
+        )
+    return status, " ".join(parts)
+
+
+def classify_bmr(
+    value: Optional[float],
+    idade_metabolica: Optional[float],
+    idade_real: Optional[int],
+    sexo: Optional[str] = None,
+    peso: Optional[float] = None,
+    altura_cm: Optional[float] = None,
+    bf: Optional[float] = None,
+) -> Tuple[str, str]:
+    if value is None:
+        return "Nao informado", "Use este valor como referencia do gasto em repouso."
+    expected = expected_bmr_by_profile(sexo, idade_real, peso, altura_cm)
+    details: List[str] = []
+    if expected is not None:
+        diff = value - expected
+        diff_percent = (diff / expected) * 100
+        if abs(diff_percent) <= 10:
+            status = "Compativel com o esperado pelo perfil"
+        elif diff_percent < 0:
+            status = "Abaixo do estimado pelo perfil"
+        else:
+            status = "Acima do estimado pelo perfil"
+        details.append(
+            f"Estimativa por sexo, idade, peso e altura: {expected:.0f} kcal/dia; diferenca: {diff:+.0f} kcal ({diff_percent:+.1f}%)."
+        )
+    else:
+        status = "Valor basal estimado"
+        details.append("Informe sexo, idade, peso e altura para comparar com uma estimativa individual.")
+    if peso is not None and bf is not None:
+        lean_mass = peso * (1 - bf / 100)
+        lean_bmr = 370 + 21.6 * lean_mass
+        details.append(f"Pela massa magra estimada ({lean_mass:.1f} kg), a referencia fica perto de {lean_bmr:.0f} kcal/dia.")
+    if idade_metabolica is not None and idade_real is not None:
+        relation = "igual ou abaixo" if idade_metabolica <= idade_real else "acima"
+        details.append(f"Idade metabolica {relation} da idade cronologica ({idade_metabolica:.0f} vs {idade_real}).")
+    return status, " ".join(details)
+
+
 def build_result_email_lines(record: EvaluationRecord, user: UserSummary) -> List[str]:
     payload = record.payload
     resultado = record.resultado
     body_water_status, body_water_ref = classify_body_water(payload.get("agua"), user.sexo)
-    muscle_status, muscle_ref = classify_muscle_percentage(payload.get("massa_muscular"), user.sexo)
-    bmr_status, bmr_ref = classify_bmr(payload.get("bmr"), payload.get("idade_metabolica"), user.idade)
+    muscle_status, muscle_ref = classify_muscle_percentage(
+        payload.get("massa_muscular"),
+        user.sexo,
+        user.idade,
+        payload.get("peso"),
+        payload.get("bf"),
+    )
+    bmr_status, bmr_ref = classify_bmr(
+        payload.get("bmr"),
+        payload.get("idade_metabolica"),
+        user.idade,
+        user.sexo,
+        payload.get("peso"),
+        user.altura_cm,
+        payload.get("bf"),
+    )
     metabolic_age_status, metabolic_age_ref = classify_metabolic_age(payload.get("idade_metabolica"), user.idade)
     bone_status, bone_ref = classify_bone_mass(payload.get("massa_ossea"), user.sexo, payload.get("peso"))
     lines = [
