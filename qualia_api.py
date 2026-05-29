@@ -1071,7 +1071,7 @@ def build_dashboard_response_for_user(conn: sqlite3.Connection, user_id: int) ->
         "SELECT * FROM evaluations WHERE user_id = ? ORDER BY created_at DESC",
         (user_id,),
     ).fetchall()
-    historico = [row_to_evaluation(row) for row in eval_rows]
+    historico = [row_to_evaluation(row, user_row) for row in eval_rows]
     return DashboardResponse(
         usuario=row_to_user_summary(user_row),
         ultima_avaliacao=historico[0] if historico else None,
@@ -1429,6 +1429,99 @@ def calcular_meta_agua(peso: float) -> float:
     return round(max(1.8, peso * 0.035), 2)
 
 
+def clamp_score(value: float) -> float:
+    return max(0.0, min(100.0, value))
+
+
+def score_by_distance(value: Optional[float], ideal_low: float, ideal_high: float, tolerance: float) -> Optional[float]:
+    if value is None:
+        return None
+    if ideal_low <= value <= ideal_high:
+        return 100.0
+    distance = ideal_low - value if value < ideal_low else value - ideal_high
+    return clamp_score(100.0 - (distance / tolerance) * 100.0)
+
+
+def calculate_quality_score(
+    user_row: sqlite3.Row,
+    payload: EvaluationInput,
+    imc: float,
+    bf_class: str,
+    vo2_class: str,
+    pressao_class: str,
+) -> float:
+    sexo = user_row["sexo"] or "m"
+    idade = int(user_row["idade"] or 0)
+    female = normalize_sex(sexo) == "f"
+    components: List[Tuple[float, Optional[float]]] = []
+
+    components.append((15.0, score_by_distance(imc, 20.0, 24.9, 10.0)))
+
+    bf_scores = {
+        "Muito Bom": 100.0,
+        "Saudável": 92.0,
+        "Magro": 74.0,
+        "Sobrepeso": 68.0,
+        "Muito Magro": 45.0,
+        "Gordo": 42.0,
+        "Muito Gordo": 25.0,
+    }
+    components.append((15.0, bf_scores.get(bf_class)))
+
+    vo2_scores = {"Muito bom": 100.0, "Bom": 88.0, "Moderado": 65.0, "Baixo": 35.0}
+    components.append((15.0, vo2_scores.get(vo2_class)))
+
+    pressure_score = None
+    if pressao_class == "Normal":
+        pressure_score = 100.0
+    elif "Pré" in pressao_class or "Pre" in pressao_class:
+        pressure_score = 72.0
+    elif "estágio 1" in pressao_class or "estagio 1" in pressao_class:
+        pressure_score = 45.0
+    elif "estágio 2" in pressao_class or "estagio 2" in pressao_class:
+        pressure_score = 25.0
+    elif "Crise" in pressao_class:
+        pressure_score = 10.0
+    components.append((15.0, pressure_score))
+
+    abd_score = clamp_score((float(payload.abd) / 40.0) * 100.0) if payload.abd is not None else None
+    flexao_ref = 25.0 if female else 35.0
+    flexao_score = clamp_score((float(payload.flexao) / flexao_ref) * 100.0) if payload.flexao is not None else None
+    strength_parts = [score for score in (abd_score, flexao_score) if score is not None]
+    strength_score = sum(strength_parts) / len(strength_parts) if strength_parts else None
+    components.append((12.0, strength_score))
+
+    flexibility_score = clamp_score((float(payload.flexibilidade) / 30.0) * 100.0) if payload.flexibilidade is not None else None
+    components.append((8.0, flexibility_score))
+
+    recovery_score = None
+    if payload.fc_pos is not None and payload.fc_rec_5 is not None and payload.fc_pos > 0 and payload.fc_rec_5 > 0:
+        drop = payload.fc_pos - payload.fc_rec_5
+        recovery_score = clamp_score(35.0 + (drop / 50.0) * 65.0)
+    elif payload.fc_rep is not None and payload.fc_rep > 0:
+        if 55 <= payload.fc_rep <= 75:
+            recovery_score = 95.0
+        elif payload.fc_rep <= 85:
+            recovery_score = 78.0
+        elif payload.fc_rep <= 100:
+            recovery_score = 55.0
+        else:
+            recovery_score = 30.0
+    components.append((8.0, recovery_score))
+
+    water_low, water_high = (45.0, 60.0) if female else (50.0, 65.0)
+    components.append((6.0, score_by_distance(payload.agua, water_low, water_high, 12.0)))
+
+    muscle_low, muscle_high, _ = muscle_reference_by_profile(sexo, idade)
+    components.append((6.0, score_by_distance(payload.massa_muscular, muscle_low, muscle_high, 18.0)))
+
+    total_weight = sum(weight for weight, score in components if score is not None)
+    if total_weight <= 0:
+        return 50.0
+    total = sum(weight * float(score) for weight, score in components if score is not None)
+    return round(clamp_score(total / total_weight), 2)
+
+
 def fetch_wellness_news(limit: int = 6) -> List[WellnessNewsItem]:
     query = urllib.parse.quote(
         '("Ponta Grossa" OR "Campos Gerais" OR "Paraná") (saúde OR "qualidade de vida" OR bem-estar OR "atividade física")'
@@ -1463,38 +1556,11 @@ def evaluate_user(user_row: sqlite3.Row, payload: EvaluationInput) -> Evaluation
         dist_m = payload.cooper * 1000.0
         vo2_est = (dist_m - 504.9) / 44.73
 
-    features = {
-        "Idade": float(user_row["idade"] or 0),
-        "Genero": normalize_sex(user_row["sexo"]),
-        "Altura_m": altura_m,
-        "Peso_kg": payload.peso,
-        "Percentual_Gordura": payload.bf or 0.0,
-        "Percentual_Agua": payload.agua or 0.0,
-        "Percentual_Massa_Muscular": payload.massa_muscular or 0.0,
-        "BMR_kcal": payload.bmr or 0.0,
-        "Idade_Metabolica": payload.idade_metabolica or 0.0,
-        "Massa_Ossea_kg": payload.massa_ossea or 0.0,
-        "VO2max_mlkgmin": vo2_est or 0.0,
-        "Pressao_Sistolica": payload.pressao_sist or 0.0,
-        "Pressao_Diastolica": payload.pressao_diast or 0.0,
-        "Flexibilidade_cm": payload.flexibilidade or 0.0,
-        "Abdominal_rep": payload.abd or 0.0,
-        "Flexao_Braco_rep": payload.flexao or 0.0,
-        "FC_Repouso": payload.fc_rep or 0.0,
-        "FC_Pos_Exercicio": payload.fc_pos or 0.0,
-        "FC_Recuperacao_5min": payload.fc_rec_5 or 0.0,
-        "Cooper_km": payload.cooper or 0.0,
-        "IMC": imc,
-    }
-    import pandas as pd
-
-    model_pipeline, model_feature_cols = ensure_model_loaded()
-    X = pd.DataFrame([{col: features.get(col, 0.0) for col in model_feature_cols}])
-    score = float(model_pipeline.predict(X)[0])
     imc_class = classificar_imc(imc)
     bf_class = classificar_bf(payload.bf, user_row["sexo"] or "m", idade)
     vo2_class = classificar_vo2(vo2_est, user_row["sexo"] or "m")
     pressao_class = classificar_pressao(payload.pressao_sist, payload.pressao_diast)
+    score = calculate_quality_score(user_row, payload, imc, bf_class, vo2_class, pressao_class)
     fortes, fracos = gerar_pontos(imc_class, bf_class, vo2_class, pressao_class, score)
     recomendacoes = gerar_recomendacoes(imc, payload.bf, vo2_est, score)
     nutrition_tips = gerar_recomendacoes_alimentares(imc_class, bf_class, pressao_class, score)
@@ -1525,7 +1591,7 @@ def evaluate_user(user_row: sqlite3.Row, payload: EvaluationInput) -> Evaluation
     )
 
 
-def row_to_user_summary(row: sqlite3.Row) -> UserSummary:
+def row_to_user_summary(row: sqlite3.Row, ultimo_score: Optional[float] = None) -> UserSummary:
     return UserSummary(
         id=row["id"],
         nome=row["nome"],
@@ -1537,7 +1603,9 @@ def row_to_user_summary(row: sqlite3.Row) -> UserSummary:
         observacoes=row["observacoes"],
         created_at=row["created_at"],
         ultima_avaliacao_em=row["ultima_avaliacao_em"] if "ultima_avaliacao_em" in row.keys() else None,
-        ultimo_score=row["ultimo_score"] if "ultimo_score" in row.keys() and row["ultimo_score"] is not None else None,
+        ultimo_score=ultimo_score
+        if ultimo_score is not None
+        else (row["ultimo_score"] if "ultimo_score" in row.keys() and row["ultimo_score"] is not None else None),
     )
 
 
@@ -1885,9 +1953,12 @@ def save_evaluation(conn: sqlite3.Connection, user_id: int, payload: EvaluationI
     return int(cur.lastrowid)
 
 
-def row_to_evaluation(row: sqlite3.Row) -> EvaluationRecord:
+def row_to_evaluation(row: sqlite3.Row, user_row: Optional[sqlite3.Row] = None) -> EvaluationRecord:
     payload_dict = json.loads(row["payload_json"])
-    result = EvaluationResult(**json.loads(row["result_json"]))
+    if user_row is not None:
+        result = evaluate_user(user_row, EvaluationInput(**payload_dict))
+    else:
+        result = EvaluationResult(**json.loads(row["result_json"]))
     return EvaluationRecord(
         id=row["id"],
         user_id=row["user_id"],
@@ -2142,13 +2213,29 @@ def list_users(_: SessionUser = Depends(require_admin)) -> List[UserSummary]:
                 WHERE e.user_id = u.id
                 ORDER BY e.created_at DESC
                 LIMIT 1
-            ) AS ultimo_score
+            ) AS ultimo_score,
+            (
+                SELECT e.payload_json
+                FROM evaluations e
+                WHERE e.user_id = u.id
+                ORDER BY e.created_at DESC
+                LIMIT 1
+            ) AS ultima_payload_json
         FROM users u
         ORDER BY u.role DESC, u.created_at DESC
         """
     ).fetchall()
     conn.close()
-    return [row_to_user_summary(row) for row in rows]
+    summaries: List[UserSummary] = []
+    for row in rows:
+        score = None
+        if row["ultima_payload_json"]:
+            try:
+                score = evaluate_user(row, EvaluationInput(**json.loads(row["ultima_payload_json"]))).score_ia
+            except Exception:
+                score = None
+        summaries.append(row_to_user_summary(row, score))
+    return summaries
 
 
 @app.get("/admin/overview", response_model=AdminOverview)
@@ -2451,7 +2538,8 @@ def search_evaluations(q: str, _: SessionUser = Depends(require_admin)) -> List[
     conn = get_conn()
     rows = conn.execute(
         """
-        SELECT e.id AS evaluation_id, e.user_id, u.nome, u.email, e.tipo_avaliacao, e.created_at,
+        SELECT e.id AS evaluation_id, e.user_id, u.*, e.tipo_avaliacao, e.created_at,
+               e.payload_json,
                json_extract(e.result_json, '$.score_ia') AS score_ia
         FROM evaluations e
         JOIN users u ON u.id = e.user_id
@@ -2462,18 +2550,23 @@ def search_evaluations(q: str, _: SessionUser = Depends(require_admin)) -> List[
         (f"%{query}%", f"%{query}%"),
     ).fetchall()
     conn.close()
-    return [
-        EvaluationSearchItem(
+    results: List[EvaluationSearchItem] = []
+    for row in rows:
+        score = row["score_ia"]
+        try:
+            score = evaluate_user(row, EvaluationInput(**json.loads(row["payload_json"]))).score_ia
+        except Exception:
+            pass
+        results.append(EvaluationSearchItem(
             evaluation_id=row["evaluation_id"],
             user_id=row["user_id"],
             nome=row["nome"],
             email=row["email"],
             tipo_avaliacao=row["tipo_avaliacao"],
             created_at=row["created_at"],
-            score_ia=row["score_ia"],
-        )
-        for row in rows
-    ]
+            score_ia=score,
+        ))
+    return results
 
 
 @app.post("/admin/users", response_model=UserSummary)
@@ -2532,7 +2625,7 @@ def create_evaluation(payload: EvaluationInput, _: SessionUser = Depends(require
     evaluation_id = save_evaluation(conn, user_row["id"], payload, result)
     row = conn.execute("SELECT * FROM evaluations WHERE id = ?", (evaluation_id,)).fetchone()
     conn.close()
-    return row_to_evaluation(row)
+    return row_to_evaluation(row, user_row)
 
 
 @app.post("/mqtt/ingest", response_model=EvaluationRecord)
@@ -2546,7 +2639,7 @@ def mqtt_ingest(payload: MqttIngestInput) -> EvaluationRecord:
     evaluation_id = save_evaluation(conn, user_row["id"], as_eval, result)
     row = conn.execute("SELECT * FROM evaluations WHERE id = ?", (evaluation_id,)).fetchone()
     conn.close()
-    return row_to_evaluation(row)
+    return row_to_evaluation(row, user_row)
 
 
 @app.get("/me/dashboard", response_model=DashboardResponse)
