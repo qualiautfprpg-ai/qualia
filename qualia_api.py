@@ -1071,7 +1071,7 @@ def build_dashboard_response_for_user(conn: sqlite3.Connection, user_id: int) ->
         "SELECT * FROM evaluations WHERE user_id = ? ORDER BY created_at DESC",
         (user_id,),
     ).fetchall()
-    historico = [row_to_evaluation(row, user_row) for row in eval_rows]
+    historico = [row_to_evaluation(row) for row in eval_rows]
     return DashboardResponse(
         usuario=row_to_user_summary(user_row),
         ultima_avaliacao=historico[0] if historico else None,
@@ -1885,15 +1885,9 @@ def save_evaluation(conn: sqlite3.Connection, user_id: int, payload: EvaluationI
     return int(cur.lastrowid)
 
 
-def row_to_evaluation(row: sqlite3.Row, user_row: Optional[sqlite3.Row] = None) -> EvaluationRecord:
+def row_to_evaluation(row: sqlite3.Row) -> EvaluationRecord:
     payload_dict = json.loads(row["payload_json"])
-    if user_row is not None:
-        try:
-            result = evaluate_user(user_row, EvaluationInput(**payload_dict))
-        except Exception:
-            result = EvaluationResult(**json.loads(row["result_json"]))
-    else:
-        result = EvaluationResult(**json.loads(row["result_json"]))
+    result = EvaluationResult(**json.loads(row["result_json"]))
     return EvaluationRecord(
         id=row["id"],
         user_id=row["user_id"],
@@ -2538,7 +2532,7 @@ def create_evaluation(payload: EvaluationInput, _: SessionUser = Depends(require
     evaluation_id = save_evaluation(conn, user_row["id"], payload, result)
     row = conn.execute("SELECT * FROM evaluations WHERE id = ?", (evaluation_id,)).fetchone()
     conn.close()
-    return row_to_evaluation(row, user_row)
+    return row_to_evaluation(row)
 
 
 @app.post("/mqtt/ingest", response_model=EvaluationRecord)
@@ -2552,7 +2546,7 @@ def mqtt_ingest(payload: MqttIngestInput) -> EvaluationRecord:
     evaluation_id = save_evaluation(conn, user_row["id"], as_eval, result)
     row = conn.execute("SELECT * FROM evaluations WHERE id = ?", (evaluation_id,)).fetchone()
     conn.close()
-    return row_to_evaluation(row, user_row)
+    return row_to_evaluation(row)
 
 
 @app.get("/me/dashboard", response_model=DashboardResponse)

@@ -1633,7 +1633,15 @@ function bindEvents() {
   document.addEventListener("click", async (event) => {
     const viewBtn = event.target.closest("[data-view-user]");
     if (viewBtn) {
-      await loadDashboardAsAdmin(viewBtn.getAttribute("data-view-user"));
+      const originalText = viewBtn.textContent;
+      viewBtn.disabled = true;
+      viewBtn.textContent = "Carregando...";
+      try {
+        await loadDashboardAsAdmin(viewBtn.getAttribute("data-view-user"));
+      } finally {
+        viewBtn.disabled = false;
+        viewBtn.textContent = originalText;
+      }
       return;
     }
     const deleteBtn = event.target.closest("[data-delete-user]");
