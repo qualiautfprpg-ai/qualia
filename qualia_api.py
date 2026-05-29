@@ -206,6 +206,29 @@ class ResultsEmailResponse(BaseModel):
     error_detail: Optional[str] = None
 
 
+class BulkResultsEmailRequest(BaseModel):
+    user_ids: List[int]
+    scope: str = Field(default="latest")
+
+
+class BulkResultsEmailItem(BaseModel):
+    user_id: int
+    nome: str
+    email: str
+    status: str
+    message: str
+    error_detail: Optional[str] = None
+
+
+class BulkResultsEmailResponse(BaseModel):
+    status: str
+    scope: str
+    sent_count: int
+    failed_count: int
+    results: List[BulkResultsEmailItem]
+    message: str
+
+
 class EmailTestInput(BaseModel):
     recipient_email: str
 
@@ -2732,6 +2755,75 @@ def email_user_results_as_admin(
         scope=scope,
         message=message,
         error_detail=error_detail,
+    )
+
+
+@app.post("/admin/results/send-email-batch", response_model=BulkResultsEmailResponse)
+def email_results_batch_as_admin(
+    payload: BulkResultsEmailRequest,
+    _: SessionUser = Depends(require_admin),
+) -> BulkResultsEmailResponse:
+    scope = (payload.scope or "latest").lower()
+    if scope not in {"latest", "all"}:
+        raise HTTPException(status_code=400, detail="Escopo invalido. Use latest ou all.")
+    user_ids = list(dict.fromkeys(payload.user_ids))
+    if not user_ids:
+        raise HTTPException(status_code=400, detail="Selecione pelo menos um usuario.")
+    if len(user_ids) > 200:
+        raise HTTPException(status_code=400, detail="Envio em lote limitado a 200 usuarios por vez.")
+
+    conn = get_conn()
+    results: List[BulkResultsEmailItem] = []
+    for user_id in user_ids:
+        try:
+            dashboard = build_dashboard_response_for_user(conn, user_id)
+            recipient_email = dashboard.usuario.email
+            if not dashboard.ultima_avaliacao:
+                results.append(
+                    BulkResultsEmailItem(
+                        user_id=user_id,
+                        nome=dashboard.usuario.nome,
+                        email=recipient_email,
+                        status="sem_avaliacao",
+                        message="Usuario sem avaliacao para enviar.",
+                    )
+                )
+                continue
+            status = send_results_email(dashboard, recipient_email, scope)
+            ok = status == "enviado"
+            results.append(
+                BulkResultsEmailItem(
+                    user_id=user_id,
+                    nome=dashboard.usuario.nome,
+                    email=recipient_email,
+                    status=status,
+                    message="E-mail enviado com sucesso." if ok else "Falha ao enviar e-mail.",
+                    error_detail=None if ok else status,
+                )
+            )
+        except Exception as exc:
+            results.append(
+                BulkResultsEmailItem(
+                    user_id=user_id,
+                    nome=f"Usuario {user_id}",
+                    email="",
+                    status="erro",
+                    message="Falha ao preparar ou enviar e-mail.",
+                    error_detail=str(exc),
+                )
+            )
+    conn.close()
+
+    sent_count = sum(1 for item in results if item.status == "enviado")
+    failed_count = len(results) - sent_count
+    status = "enviado" if failed_count == 0 else ("parcial" if sent_count else "erro")
+    return BulkResultsEmailResponse(
+        status=status,
+        scope=scope,
+        sent_count=sent_count,
+        failed_count=failed_count,
+        results=results,
+        message=f"{sent_count} e-mail(s) enviado(s); {failed_count} pendente(s) ou com falha.",
     )
 
 

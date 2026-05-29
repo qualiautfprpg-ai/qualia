@@ -674,10 +674,14 @@ async function handleLogout() {
 
 function userCard(user) {
   const score = user.ultimo_score != null ? Number(user.ultimo_score).toFixed(1) : "--";
+  const selectable = user.role !== "admin";
   return `
     <div class="user-row">
       <div>
-        <strong>${user.nome}</strong>
+        <label class="check-line">
+          ${selectable ? `<input type="checkbox" data-bulk-user="${user.id}" />` : ""}
+          <strong>${user.nome}</strong>
+        </label>
         <div>${user.email}</div>
         <div class="muted">Idade ${user.idade ?? "-"} | Sexo ${user.sexo ?? "-"} | Altura ${user.altura_cm ?? "-"} cm</div>
       </div>
@@ -890,6 +894,7 @@ function fillEvaluationFromRoster(studentId) {
   $("eval-roster").value = String(student.id);
   $("eval-nome").value = student.nome || "";
   $("eval-email").value = student.linked_user_email || "";
+  if (student.linked_user_email) fillEvaluationProfileFromEmail();
   $("eval-discipline").value = state.currentDisciplineId ? String(state.currentDisciplineId) : "";
   showToast(`Aluno ${student.nome} carregado no formulário.`);
 }
@@ -936,6 +941,75 @@ function updateUserEmailDatalist() {
     .filter((user) => user.role !== "admin")
     .map((user) => `<option value="${user.email}">${user.nome}</option>`)
     .join("");
+}
+
+function findUserByEmail(email) {
+  const normalized = String(email || "").trim().toLowerCase();
+  if (!normalized) return null;
+  return state.users.find((user) => String(user.email || "").toLowerCase() === normalized) || null;
+}
+
+function fillEvaluationProfileFromUser(user) {
+  if (!user) return false;
+  $("eval-email").value = user.email || "";
+  $("eval-nome").value = user.nome || "";
+  $("eval-idade").value = user.idade ?? "";
+  $("eval-sexo").value = user.sexo || "";
+  $("eval-altura").value = user.altura_cm ?? "";
+  return true;
+}
+
+function fillEvaluationProfileFromEmail() {
+  const user = findUserByEmail($("eval-email").value);
+  if (!user) return;
+  fillEvaluationProfileFromUser(user);
+}
+
+function getSelectedBulkUserIds() {
+  return [...document.querySelectorAll("[data-bulk-user]:checked")].map((input) => Number(input.dataset.bulkUser));
+}
+
+function updateBulkSelectAllState() {
+  const selectAll = $("bulk-users-select-all");
+  if (!selectAll) return;
+  const boxes = [...document.querySelectorAll("[data-bulk-user]")];
+  const checked = boxes.filter((box) => box.checked);
+  selectAll.checked = boxes.length > 0 && checked.length === boxes.length;
+  selectAll.indeterminate = checked.length > 0 && checked.length < boxes.length;
+}
+
+async function handleBulkSendResultsEmail(scope) {
+  const userIds = getSelectedBulkUserIds();
+  if (!userIds.length) {
+    setFormFeedback("bulk-email-feedback", "Selecione pelo menos uma pessoa.", true);
+    return;
+  }
+  const latestBtn = $("bulk-send-latest-btn");
+  const allBtn = $("bulk-send-all-btn");
+  latestBtn.disabled = true;
+  allBtn.disabled = true;
+  clearFormFeedback("bulk-email-feedback");
+  try {
+    const response = await api("/admin/results/send-email-batch", {
+      method: "POST",
+      body: JSON.stringify({ user_ids: userIds, scope }),
+    });
+    const isError = response.status === "erro";
+    const failedNames = (response.results || [])
+      .filter((item) => item.status !== "enviado")
+      .slice(0, 4)
+      .map((item) => item.nome)
+      .join(", ");
+    const suffix = failedNames ? ` Pendentes/falhas: ${failedNames}.` : "";
+    setFormFeedback("bulk-email-feedback", `${response.message}${suffix}`, isError);
+    showToast(response.message, isError);
+  } catch (error) {
+    setFormFeedback("bulk-email-feedback", error.message, true);
+    showToast(error.message, true);
+  } finally {
+    latestBtn.disabled = false;
+    allBtn.disabled = false;
+  }
 }
 
 function updateEvaluationEntryMode() {
@@ -1044,6 +1118,7 @@ async function renderAdmin() {
   $("admin-users-count").textContent = String(overview.total_users);
   $("admin-evals-count").textContent = String(overview.total_evaluations);
   $("admin-users-list").innerHTML = users.map(userCard).join("") || "<p class='muted'>Nenhum usuário cadastrado.</p>";
+  updateBulkSelectAllState();
   $("admin-appointments-list").innerHTML =
     appointments.map(appointmentCard).join("") || "<p class='muted'>Nenhum agendamento registrado.</p>";
   $("eval-search-results").innerHTML = "<p class='muted'>Busque por nome ou e-mail para encontrar testes rapidamente.</p>";
@@ -1600,6 +1675,16 @@ function bindEvents() {
   $("admin-eval-form").addEventListener("submit", handleCreateEvaluation);
   $("eval-entry-mode").addEventListener("change", updateEvaluationEntryMode);
   $("eval-tipo").addEventListener("change", updateEvaluationFormVisibility);
+  $("eval-email").addEventListener("change", fillEvaluationProfileFromEmail);
+  $("eval-email").addEventListener("blur", fillEvaluationProfileFromEmail);
+  $("bulk-users-select-all").addEventListener("change", (event) => {
+    document.querySelectorAll("[data-bulk-user]").forEach((input) => {
+      input.checked = event.target.checked;
+    });
+    updateBulkSelectAllState();
+  });
+  $("bulk-send-latest-btn").addEventListener("click", () => handleBulkSendResultsEmail("latest"));
+  $("bulk-send-all-btn").addEventListener("click", () => handleBulkSendResultsEmail("all"));
   $("eval-discipline").addEventListener("change", async (event) => {
     const disciplineId = event.target.value;
     if (!disciplineId) return;
@@ -1611,6 +1696,9 @@ function bindEvents() {
   $("eval-search-input").addEventListener("input", () => {
     clearTimeout(bindEvents.searchTimer);
     bindEvents.searchTimer = setTimeout(runEvaluationSearch, 260);
+  });
+  document.addEventListener("change", (event) => {
+    if (event.target.matches("[data-bulk-user]")) updateBulkSelectAllState();
   });
   $("water-add-btn").addEventListener("click", handleWaterAdd);
   $("water-reset-btn").addEventListener("click", handleWaterReset);

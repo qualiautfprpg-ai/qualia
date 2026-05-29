@@ -701,6 +701,32 @@ textarea:focus {
   flex-wrap: wrap;
 }
 
+.bulk-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 8px 0 14px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.56);
+  border: 1px solid rgba(70, 112, 84, 0.08);
+}
+
+.check-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.check-line input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--green);
+}
+
 .score-actions {
   margin-top: 16px;
 }
