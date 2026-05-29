@@ -235,6 +235,146 @@ function formatMetricValue(value, suffix = "", digits = 1) {
   return `${Number(value).toFixed(digits)}${suffix}`;
 }
 
+function setBioExplanation(id, summary, example) {
+  const summaryEl = $(`bio-${id}-summary`);
+  const exampleEl = $(`bio-${id}-example`);
+  if (summaryEl) summaryEl.textContent = summary;
+  if (exampleEl) exampleEl.textContent = example;
+}
+
+function getBodyWaterInterpretation(value, sexo) {
+  if (value == null) {
+    return {
+      summary: "Mostra a quantidade de água presente no corpo. Sem esse dado, não dá para avaliar hidratação corporal.",
+      example: "Exemplo: valores nessa faixa ajudam a indicar se o corpo está mais hidratado ou mais abaixo do ideal.",
+    };
+  }
+  const female = String(sexo || "").toLowerCase().startsWith("f");
+  const min = female ? 45 : 50;
+  const max = female ? 60 : 65;
+  if (value < min) {
+    return {
+      summary: `Seu resultado foi ${value.toFixed(1)}%, abaixo da faixa geralmente esperada (${min}% a ${max}%). Isso pode sugerir hidratação baixa ou pouca água corporal em relação ao peso.`,
+      example: "Exemplo: quando esse número fica baixo, costuma valer a pena olhar hidratação, rotina e composição corporal como um todo.",
+    };
+  }
+  if (value > max) {
+    return {
+      summary: `Seu resultado foi ${value.toFixed(1)}%, acima da faixa de referência (${min}% a ${max}%). Em geral, indica boa presença de água corporal, mas a leitura sempre deve ser vista junto com os outros dados.`,
+      example: "Exemplo: esse valor sozinho não diz tudo; ele faz mais sentido quando comparado com gordura, músculos e peso.",
+    };
+  }
+  return {
+    summary: `Seu resultado foi ${value.toFixed(1)}%, dentro da faixa geralmente esperada (${min}% a ${max}%). Isso sugere um nível de água corporal compatível com a referência.`,
+    example: "Exemplo: ficar nessa faixa costuma ser um sinal mais equilibrado de hidratação corporal.",
+  };
+}
+
+function getMuscleInterpretation(value, sexo) {
+  if (value == null) {
+    return {
+      summary: "Mostra a participação estimada dos músculos no corpo. Sem esse dado, não dá para comentar a massa muscular.",
+      example: "Exemplo: quanto maior a participação muscular, maior tende a ser a presença de massa magra no corpo.",
+    };
+  }
+  const female = String(sexo || "").toLowerCase().startsWith("f");
+  const min = female ? 24 : 33;
+  const max = female ? 30 : 39;
+  if (value < min) {
+    return {
+      summary: `Seu resultado foi ${value.toFixed(1)}%, abaixo da faixa orientativa usada pelo sistema (${min}% a ${max}%). Isso pode indicar baixa participação muscular na composição corporal.`,
+      example: "Exemplo: quando esse valor fica menor, o foco costuma ser ganhar força e melhorar a massa magra ao longo do tempo.",
+    };
+  }
+  if (value > max) {
+    return {
+      summary: `Seu resultado foi ${value.toFixed(1)}%, acima da faixa orientativa (${min}% a ${max}%). Em geral, isso sugere uma participação muscular acima da média esperada.`,
+      example: "Exemplo: esse tipo de resultado costuma aparecer com mais frequência em pessoas mais treinadas ou com mais massa magra.",
+    };
+  }
+  return {
+    summary: `Seu resultado foi ${value.toFixed(1)}%, dentro da faixa orientativa (${min}% a ${max}%). Isso sugere uma participação muscular mais adequada.`,
+    example: "Exemplo: ficar nessa faixa indica uma composição corporal mais equilibrada do ponto de vista muscular.",
+  };
+}
+
+function getBmrInterpretation(value) {
+  if (value == null) {
+    return {
+      summary: "O BMR é a energia que o corpo gasta para manter funções básicas, mesmo em repouso. Sem esse dado, não dá para comentar o gasto basal.",
+      example: "Exemplo: respirar, manter a circulação e a temperatura corporal fazem parte desse gasto.",
+    };
+  }
+  return {
+    summary: `Seu BMR foi ${value.toFixed(0)} kcal/dia. Isso significa a energia aproximada que o corpo precisaria em um dia mesmo sem exercício.`,
+    example: "Exemplo: esse valor não é 'bom' ou 'ruim' sozinho, porque depende de idade, peso, altura e quantidade de massa magra.",
+  };
+}
+
+function getMetabolicAgeInterpretation(value, idadeReal) {
+  if (value == null) {
+    return {
+      summary: "A idade metabólica compara o funcionamento do metabolismo com uma idade média. Sem esse dado, não dá para fazer a comparação.",
+      example: "Exemplo: ela é usada como uma referência simples para entender se o metabolismo parece mais novo, parecido ou mais velho que a idade real.",
+    };
+  }
+  if (idadeReal == null) {
+    return {
+      summary: `Seu resultado foi ${value.toFixed(0)} anos. Para interpretar melhor, o ideal é comparar esse número com a idade real da pessoa.`,
+      example: "Exemplo: se a idade metabólica fica abaixo da idade real, isso costuma ser visto como um sinal mais favorável.",
+    };
+  }
+  if (value <= idadeReal) {
+    return {
+      summary: `Seu resultado foi ${value.toFixed(0)} anos, igual ou abaixo da idade real (${idadeReal} anos). Em geral, isso sugere uma resposta metabólica mais favorável.`,
+      example: "Exemplo: quando a idade metabólica acompanha ou fica abaixo da cronológica, costuma ser um resultado positivo.",
+    };
+  }
+  return {
+    summary: `Seu resultado foi ${value.toFixed(0)} anos, acima da idade real (${idadeReal} anos). Isso sugere que o metabolismo pode estar funcionando de forma menos favorável do que o esperado para a idade.`,
+    example: "Exemplo: atividade física regular, sono e alimentação podem ajudar a melhorar essa leitura com o tempo.",
+  };
+}
+
+function getBoneInterpretation(value) {
+  if (value == null) {
+    return {
+      summary: "A massa óssea é uma estimativa do peso mineral dos ossos dentro da composição corporal. Sem esse dado, não há leitura específica.",
+      example: "Exemplo: esse número não substitui exames clínicos dos ossos, mas ajuda a compor a visão geral do corpo.",
+    };
+  }
+  return {
+    summary: `Seu resultado foi ${value.toFixed(1)} kg. Esse número representa uma estimativa do peso dos ossos dentro da composição corporal e deve ser visto como referência, não como diagnóstico isolado.`,
+    example: "Exemplo: ele faz mais sentido quando analisado junto com peso, massa muscular e histórico de avaliações.",
+  };
+}
+
+function getWeightInterpretation(value, imcClass) {
+  if (value == null) {
+    return {
+      summary: "O peso mostra quanto o corpo pesava no dia da avaliação. Sem esse dado, não há como relacionar com os outros indicadores.",
+      example: "Exemplo: o peso sozinho não define saúde; ele ganha sentido quando analisado com altura, gordura e massa muscular.",
+    };
+  }
+  return {
+    summary: `Seu resultado foi ${value.toFixed(1)} kg. Esse valor mostra o peso total no dia do teste e precisa ser analisado junto com IMC, gordura e massa muscular. No seu caso, o IMC ficou em ${imcClass}.`,
+    example: "Exemplo: duas pessoas com o mesmo peso podem ter composições corporais bem diferentes.",
+  };
+}
+
+function getBodyFatInterpretation(value, classification) {
+  if (value == null) {
+    return {
+      summary: "Esse indicador mostra quanto do corpo é formado por gordura. Sem esse dado, não há leitura da composição de gordura.",
+      example: "Exemplo: o percentual de gordura ajuda a entender melhor o corpo do que olhar só o peso isolado.",
+    };
+  }
+  return {
+    summary: `Seu resultado foi ${value.toFixed(1)}%. Pela referência usada no sistema, isso foi classificado como ${classification}.`,
+    example: "Exemplo: esse número ajuda a diferenciar se o peso está vindo mais de gordura, músculos, água e outros componentes do corpo.",
+  };
+}
+
 function renderWeeklyPlan(plan, userId) {
   const container = $("weekly-plan-list");
   if (!plan.length || !userId) {
@@ -1133,6 +1273,13 @@ function renderDashboard(data) {
     $("bio-bmr-value").textContent = "--";
     $("bio-metabolic-age-value").textContent = "--";
     $("bio-bone-value").textContent = "--";
+    setBioExplanation("peso", "O peso mostra quanto o corpo pesava no dia da avaliação.", "Exemplo: o peso sozinho não explica a composição do corpo; ele faz mais sentido junto com IMC, gordura e massa muscular.");
+    setBioExplanation("bf", "Esse indicador mostra quanto do corpo é formado por gordura.", "Exemplo: ele ajuda a perceber se o peso está vindo mais de gordura ou de outros componentes do corpo.");
+    setBioExplanation("agua", "Esse indicador mostra a quantidade de água presente no corpo.", "Exemplo: a leitura ajuda a entender se a água corporal parece mais baixa, adequada ou acima da faixa esperada.");
+    setBioExplanation("muscle", "Esse indicador estima a participação dos músculos na composição corporal.", "Exemplo: ele ajuda a entender se a massa muscular está mais baixa, adequada ou acima da média.");
+    setBioExplanation("bmr", "O BMR mostra o quanto o corpo gasta de energia em repouso ao longo do dia.", "Exemplo: mesmo sem exercício, o corpo continua gastando energia para manter funções vitais.");
+    setBioExplanation("metabolic-age", "A idade metabólica compara o funcionamento do metabolismo com uma idade média.", "Exemplo: ela traduz o metabolismo de forma mais simples para comparação com a idade real.");
+    setBioExplanation("bone", "A massa óssea é uma estimativa do peso dos ossos na composição corporal.", "Exemplo: esse valor compõe a visão geral do corpo, mas não substitui um exame clínico dos ossos.");
     createListItems("pontos-fortes", ["Sem avaliação ainda."]);
     createListItems("pontos-fracos", ["Assim que um teste for salvo, a leitura da IA aparecerá aqui."]);
     createListItems("recomendacoes", ["Cadastre uma avaliação pelo painel do administrador."]);
@@ -1168,6 +1315,20 @@ function renderDashboard(data) {
   $("bio-bmr-value").textContent = formatMetricValue(latest.payload.bmr, " kcal", 0);
   $("bio-metabolic-age-value").textContent = formatMetricValue(latest.payload.idade_metabolica, " anos", 0);
   $("bio-bone-value").textContent = formatMetricValue(latest.payload.massa_ossea, " kg");
+  const weightInfo = getWeightInterpretation(latest.payload.peso, result.imc_class);
+  const bfInfo = getBodyFatInterpretation(latest.payload.bf, result.bf_class);
+  const waterInfo = getBodyWaterInterpretation(latest.payload.agua, user.sexo);
+  const muscleInfo = getMuscleInterpretation(latest.payload.massa_muscular, user.sexo);
+  const bmrInfo = getBmrInterpretation(latest.payload.bmr);
+  const metabolicAgeInfo = getMetabolicAgeInterpretation(latest.payload.idade_metabolica, user.idade);
+  const boneInfo = getBoneInterpretation(latest.payload.massa_ossea);
+  setBioExplanation("peso", weightInfo.summary, weightInfo.example);
+  setBioExplanation("bf", bfInfo.summary, bfInfo.example);
+  setBioExplanation("agua", waterInfo.summary, waterInfo.example);
+  setBioExplanation("muscle", muscleInfo.summary, muscleInfo.example);
+  setBioExplanation("bmr", bmrInfo.summary, bmrInfo.example);
+  setBioExplanation("metabolic-age", metabolicAgeInfo.summary, metabolicAgeInfo.example);
+  setBioExplanation("bone", boneInfo.summary, boneInfo.example);
 
   createListItems("pontos-fortes", result.pontos_fortes);
   createListItems("pontos-fracos", result.pontos_fracos);
